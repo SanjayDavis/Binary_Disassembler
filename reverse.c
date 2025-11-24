@@ -15,23 +15,30 @@ typedef struct {
     uint8_t opcode;
 } cpu_instruction;
 
-
-
 enum ins_type {
     NOP,
-    RET,
-    RET_IMM16,
-    INT3,
-    INTO,
-    IRET,
+    CBW,
+    CWD,
+    SAHF,
+    LAHF,
     HLT,
     CMC,
     CLC,
     STC,
-    CLD,
-    STD,
     CLI,
     STI,
+    CLD,
+    STD,
+    INT3,
+    INTO,
+    IRET,
+    RET,
+    RET_IMM16,
+    RETF,
+    DAA,
+    DAS,
+    AAA,
+    AAS,
     INVALID
 };
 
@@ -44,42 +51,41 @@ enum operand_type{
 typedef struct {
     enum ins_type type;
     const char *mnemonic;
+    int pc_increment;
 } instruction;
 
 
-
 instruction opcode_table[256] = {
-    [0x90] = {NOP,  "NOP"},
-    [0xC3] = {RET,  "RET"},
-    [0xC2] = {RET_IMM16, "RET imm16"},
-    [0xCC] = {INT3, "INT3"},
-    [0xCE] = {INTO, "INTO"},
-    [0xCF] = {IRET, "IRET"},
-    [0xF4] = {HLT,  "HLT"},
-    [0xF5] = {CMC,  "CMC"},
+    [0 ... 255] = {INVALID, NULL, 1}, 
 
-    [0xF8] = {CLC, "CLC"},
-    [0xF9] = {STC, "STC"},
-    [0xFC] = {CLD, "CLD"},
-    [0xFD] = {STD, "STD"},
-    [0xFA] = {CLI, "CLI"},
-    [0xFB] = {STI, "STI"},
+    [0x27] = {DAA,"DAA",1},
+    [0x2F] = {DAS,"DAS",1},
+    [0x37] = {AAA,"AAA",1},
+    [0x3F] = {AAS,"AAS",1},
+
+    [0x90] = {NOP,  "NOP", 1},
+    [0x98] = {CBW,"CBW",1},
+    [0x99] = {CWD,"CWD",1},
+    [0x9E] = {SAHF,"SAHF",1},
+    [0x9F] = {LAHF,"LAHF",1},
+
+    [0xC3] = {RET,  "RET", 1},
+    [0xC2] = {RET_IMM16, "RET imm16", 3},
+    [0xCB] = {RETF, "RETF imm16", 3},
+
+    [0xCC] = {INT3, "INT3", 1},
+    [0xCE] = {INTO, "INTO", 1},
+    [0xCF] = {IRET, "IRET", 1},
+
+    [0xF4] = {HLT,  "HLT", 1},
+    [0xF5] = {CMC,  "CMC", 1},
+    [0xF8] = {CLC,  "CLC", 1},
+    [0xF9] = {STC,  "STC", 1},
+    [0xFA] = {CLI,  "CLI", 1},
+    [0xFB] = {STI,  "STI", 1},
+    [0xFC] = {CLD,  "CLD", 1},
+    [0xFD] = {STD,  "STD", 1},
 };
-
-void get_opcode(cpu_instruction *cpu, file_t *file) {
-    uint8_t op = file->values[cpu->pc];
-    instruction ins = opcode_table[op];
-
-    if (ins.mnemonic == NULL) {
-        printf("%04zx: %02x   UNKNOWN\n", cpu->pc, op);
-        return;
-    }
-
-    printf("%04zx: %02x   %s\n", cpu->pc, op, ins.mnemonic);
-}
-
-
-
 
 
 file_t * assign_values(FILE * fileptr){
@@ -113,7 +119,19 @@ file_t * assign_values(FILE * fileptr){
     return file_info;
 }
 
-void get_opcode(cpu_instruction cpu){
+void get_opcode(cpu_instruction *cpu, file_t *file) {
+    uint8_t op = file->values[cpu->pc];
+    instruction ins = opcode_table[op];
+
+    
+    if (ins.mnemonic == NULL) {
+        printf("%04zx: %02x   UNKNOWN (bytes: 1)\n", cpu->pc, op);
+        cpu->pc += 1;
+        return;
+    }
+
+    printf("%04zx: %02x   %s (bytes: %d)\n", cpu->pc, op, ins.mnemonic, ins.pc_increment);
+    cpu->pc += ins.pc_increment;
 }
 
 
@@ -134,13 +152,10 @@ int main(int argc, char ** argv){
     file_t * file = assign_values(fileptr);
     fclose(fileptr);
 
-    cpu_instruction cpu;  
-    
     cpu_instruction cpu = {0};
 
     while (cpu.pc < file->file_size) {
         get_opcode(&cpu, file);
-        cpu.pc += 1;
     }
 
 

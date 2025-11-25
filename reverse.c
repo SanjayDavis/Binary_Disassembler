@@ -3,6 +3,17 @@
 #include <stdint.h>
 #include <unistd.h>
 
+enum architecture {
+    ARCH_UNKNOWN,
+    ARCH_X86_32,
+    ARCH_X86_64,
+    ARCH_ARM,
+    ARCH_ARM64,
+    ARCH_MIPS,
+    ARCH_RISCV,
+    ARCH_IA64
+};
+
 enum file_type {
     ELF,
     PE,
@@ -12,7 +23,9 @@ enum file_type {
 typedef struct {
     size_t file_size;
     uint8_t * values;
-    enum file_type f_type; 
+    enum file_type f_type;
+    enum architecture arch;
+    uint8_t bits;
 } file_t;
 
 
@@ -41,37 +54,28 @@ typedef struct {
 } cpu_instruction;
 
 enum ins_type {
-    // Data Transfer
     MOV, PUSH, POP, XCHG, XLAT, LEA, LDS, LES,
     
-    // Arithmetic
     ADD, ADC, SUB, SBB, INC, DEC, NEG, CMP, MUL, IMUL, DIV, IDIV,
     DAA, DAS, AAA, AAS, AAM, AAD,
     
-    // Logical
     AND, OR, XOR, NOT, TEST,
     
-    // Shift/Rotate
     SHL, SHR, SAL, SAR, ROL, ROR, RCL, RCR,
     
-    // String Operations
     MOVS, CMPS, SCAS, LODS, STOS, REP, REPE, REPNE,
     
-    // Control Transfer
     JMP, JE, JNE, JZ, JNZ, JL, JLE, JG, JGE, JB, JBE, JA, JAE,
     JS, JNS, JO, JNO, JP, JNP, JPE, JPO, JCXZ,
     CALL, RET, RET_IMM16, RETF, RETF_IMM16,
     INT, INT3, INTO, IRET, LOOP, LOOPE, LOOPNE,
     
-    // Processor Control
     NOP, HLT, WAIT, ESC, LOCK,
     CLC, STC, CMC, CLD, STD, CLI, STI,
     LAHF, SAHF, PUSHF, POPF,
     
-    // Conversion
     CBW, CWD, CDQ,
     
-    // Segment
     SEGMENT_OVERRIDE,
     
     INVALID
@@ -339,6 +343,57 @@ void get_opcode(cpu_instruction *cpu, file_t *file) {
 }
 
 
+void detect_elf_arch(file_t *file) {
+    uint8_t elf_class = file->values[4];
+    uint16_t machine = *(uint16_t*)&file->values[0x12];
+
+    if (elf_class == 1) file->bits = 32;
+    else if (elf_class == 2) file->bits = 64;
+    else file->bits = 0;
+
+    switch (machine) {
+        case 0x03: file->arch = ARCH_X86_32; break;
+        case 0x3E: file->arch = ARCH_X86_64; break;
+        case 0x28: file->arch = ARCH_ARM; break;
+        case 0xB7: file->arch = ARCH_ARM64; break;
+        case 0x08: file->arch = ARCH_MIPS; break;
+        case 0xF3: file->arch = ARCH_RISCV; break;
+        default:   file->arch = ARCH_UNKNOWN; break;
+    }
+}
+
+void detect_pe_arch(file_t *file) {
+    uint32_t pe_offset = *(uint32_t*)&file->values[0x3C];
+    uint16_t machine = *(uint16_t*)&file->values[pe_offset + 4];
+
+    switch (machine) {
+        case 0x014c:
+            file->arch = ARCH_X86_32;
+            file->bits = 32;
+            break;
+        case 0x8664:
+            file->arch = ARCH_X86_64;
+            file->bits = 64;
+            break;
+        case 0x01c0:
+            file->arch = ARCH_ARM;
+            file->bits = 32;
+            break;
+        case 0xAA64:
+            file->arch = ARCH_ARM64;
+            file->bits = 64;
+            break;
+        case 0x0200:
+            file->arch = ARCH_IA64;
+            file->bits = 64;
+            break;
+        default:
+            file->arch = ARCH_UNKNOWN;
+            file->bits = 0;
+            break;
+    }
+}
+
 void check_for_file_type(file_t * file){
     int elf[] = {0x7f,0x45,0x4c,0x46}; // 0x7f E L F (Linux)
     int pe[] = {0x4d,0x5a}; // M Z (Windows)
@@ -350,6 +405,7 @@ void check_for_file_type(file_t * file){
     }
     if (check == 4){
         file->f_type = ELF;
+        detect_elf_arch(file);
         return;
     }
     check = 0;  
@@ -359,16 +415,44 @@ void check_for_file_type(file_t * file){
     }
     if (check == 2){
         file->f_type = PE;
+        detect_pe_arch(file);
         return;
     }
     file->f_type = UNKNOWN;
+    file->arch = ARCH_UNKNOWN;
+    file->bits = 0;
 }
 
 
 void display_file_info(file_t * file){
-    // file type
-
-    printf("==FILE INFORMATION==")
+    printf("\n==== FILE INFORMATION ====\n");
+    
+    printf("File Size: %zu bytes\n", file->file_size);
+    
+    printf("File Type: ");
+    switch (file->f_type) {
+        case ELF: printf("ELF (Linux/Unix)\n"); break;
+        case PE:  printf("PE (Windows)\n"); break;
+        default:  printf("Unknown\n"); break;
+    }
+    
+    printf("Architecture: ");
+    switch (file->arch) {
+        case ARCH_X86_32: printf("x86 (IA-32)\n"); break;
+        case ARCH_X86_64: printf("x86-64\n"); break;
+        case ARCH_ARM:    printf("ARM\n"); break;
+        case ARCH_ARM64:  printf("ARM64 (AArch64)\n"); break;
+        case ARCH_MIPS:   printf("MIPS\n"); break;
+        case ARCH_RISCV:  printf("RISC-V\n"); break;
+        case ARCH_IA64:   printf("IA-64\n"); break;
+        default:          printf("Unknown\n"); break;
+    }
+    
+    if (file->bits > 0) {
+        printf("Bit Width: %d-bit\n", file->bits);
+    }
+    
+    printf("==========================\n\n");
 }
 
 

@@ -3,9 +3,16 @@
 #include <stdint.h>
 #include <unistd.h>
 
+enum file_type {
+    ELF,
+    PE,
+    UNKNOWN
+};
+
 typedef struct {
     size_t file_size;
     uint8_t * values;
+    enum file_type f_type; 
 } file_t;
 
 
@@ -22,7 +29,9 @@ reg registers[] = {
     [5] = {"NO REG"},
     [6] = {"ESI"},
     [7] = {"EDI"},
-    [8 ... 255] = {"NULL"}
+    [8] = {"ESP"},
+    [9] = {"EBP"},
+    [10 ... 255] = {"NULL"}
 };
 
 
@@ -304,7 +313,7 @@ file_t * assign_values(FILE * fileptr){
     }
 
     file_info->values = buffer;
-    int count = fread(buffer,1,size,fileptr);
+    size_t count = fread(buffer,1,size,fileptr);
     if(count != size)
     {
         printf("fread did not read all values");
@@ -330,6 +339,38 @@ void get_opcode(cpu_instruction *cpu, file_t *file) {
 }
 
 
+void check_for_file_type(file_t * file){
+    int elf[] = {0x7f,0x45,0x4c,0x46}; // 0x7f E L F (Linux)
+    int pe[] = {0x4d,0x5a}; // M Z (Windows)
+
+    int check = 0;
+    for (int i = 0 ; i < 4;i++){
+        if (file->values[i] == elf[i]) check +=1;
+        else break;
+    }
+    if (check == 4){
+        file->f_type = ELF;
+        return;
+    }
+    check = 0;  
+    for (int i = 0 ; i<2 ; i++){
+        if (file->values[i] == pe[i]) check +=1;
+        else break;
+    }
+    if (check == 2){
+        file->f_type = PE;
+        return;
+    }
+    file->f_type = UNKNOWN;
+}
+
+
+void display_file_info(file_t * file){
+    // file type
+
+    printf("==FILE INFORMATION==")
+}
+
 
 int main(int argc, char ** argv){
     if (argc < 2){
@@ -347,11 +388,15 @@ int main(int argc, char ** argv){
     file_t * file = assign_values(fileptr);
     fclose(fileptr);
 
-    cpu_instruction cpu = {0};
+    check_for_file_type(file);
+    display_file_info(file);
 
-    while (cpu.pc < file->file_size) {
-        get_opcode(&cpu, file);
-    }
+    
+
+    // cpu_instruction cpu = {0};
+    // while (cpu.pc < file->file_size) {
+    //     get_opcode(&cpu, file);
+    // }
 
 
     exit(EXIT_SUCCESS);

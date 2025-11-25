@@ -12,7 +12,7 @@ SOURCES = reverse.c
 # Default target
 all: $(TARGET)
 
-$(TARGET): $(SOURCES) inst.h
+$(TARGET): $(SOURCES)
 	$(CC) $(CFLAGS) -o $@ $(SOURCES)
 
 # Debug build

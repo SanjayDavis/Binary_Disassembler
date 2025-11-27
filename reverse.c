@@ -51,19 +51,19 @@ enum file_type {
 
 typedef struct {
     char name[16];
-    uint32_t type;       // Section type (PROGBITS, NOBITS, etc.)
+    uint32_t type;    
     uint32_t vaddr;
     uint32_t raw_offset;
     uint32_t raw_size;
     uint32_t flags;
     uint32_t align;
-    uint8_t *data;       // Actual section data loaded from file
+    uint8_t *data;   
 } section_t;
 
 typedef struct {
     char name[256];
-    uint32_t rva;        // Relative Virtual Address
-    uint32_t address;    // Actual address in memory
+    uint32_t rva;     
+    uint32_t address;  
 } function_t;
 
 typedef struct {
@@ -72,14 +72,14 @@ typedef struct {
     enum file_type f_type;
     enum architecture arch;
     uint8_t bits;
-    uint8_t is_big_endian;  // 0 = little endian, 1 = big endian
+    uint8_t is_big_endian;  
 
     int num_of_sections;
     uint32_t entry_address;
-    section_t * sections; // array of sections
+    section_t * sections; 
     
     int num_of_functions;
-    function_t * functions; // array of imported/exported functions
+    function_t * functions; 
 
 } file_t;
 

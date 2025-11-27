@@ -2,7 +2,11 @@
 #include <stdlib.h>
 #include <stdint.h>
 #include <string.h>
+
+// Cross-platform: only include unistd.h on non-Windows systems
+#ifndef _WIN32
 #include <unistd.h>
+#endif
 
 enum architecture {
     ARCH_UNKNOWN,
@@ -21,12 +25,62 @@ enum file_type {
     UNKNOWN
 };
 
+// Section flags (cross-platform)
+#define SEC_ALLOC   0x1
+#define SEC_EXEC    0x2
+#define SEC_WRITE   0x4
+#define SEC_READ    0x8
+
+// ELF section types
+#define SHT_NULL     0
+#define SHT_PROGBITS 1
+#define SHT_SYMTAB   2
+#define SHT_STRTAB   3
+#define SHT_RELA     4
+#define SHT_HASH     5
+#define SHT_DYNAMIC  6
+#define SHT_NOTE     7
+#define SHT_NOBITS   8
+#define SHT_REL      9
+#define SHT_DYNSYM   11
+
+// ELF section flags
+#define SHF_WRITE     0x1
+#define SHF_ALLOC     0x2
+#define SHF_EXECINSTR 0x4
+
+typedef struct {
+    char name[16];
+    uint32_t type;       // Section type (PROGBITS, NOBITS, etc.)
+    uint32_t vaddr;
+    uint32_t raw_offset;
+    uint32_t raw_size;
+    uint32_t flags;
+    uint32_t align;
+    uint8_t *data;       // Actual section data loaded from file
+} section_t;
+
+typedef struct {
+    char name[256];
+    uint32_t rva;        // Relative Virtual Address
+    uint32_t address;    // Actual address in memory
+} function_t;
+
 typedef struct {
     size_t file_size;
     uint8_t * values;
     enum file_type f_type;
     enum architecture arch;
     uint8_t bits;
+    uint8_t is_big_endian;  // 0 = little endian, 1 = big endian
+
+    int num_of_sections;
+    uint32_t entry_address;
+    section_t * sections; // array of sections
+    
+    int num_of_functions;
+    function_t * functions; // array of imported/exported functions
+
 } file_t;
 
 
@@ -361,6 +415,8 @@ size_t get_immediate_offset(cpu_instruction *cpu, file_t *file, instruction *ins
     return offset;
 }
 
+
+
 void fill_instruction(instruction *ins, cpu_instruction *cpu, file_t *file) {
     if (ins->mnemonic == NULL) return;
     
@@ -459,10 +515,24 @@ void get_opcode(cpu_instruction *cpu, file_t *file) {
     cpu->pc += ins.pc_increment;
 }
 
+uint16_t read16(uint8_t *data, int swap);
+uint32_t read32(uint8_t *data, int swap);
+uint64_t read64(uint8_t *data, int swap);
 
 void detect_elf_arch(file_t *file) {
     uint8_t elf_class = file->values[4];
-    uint16_t machine = *(uint16_t*)&file->values[0x12];
+    uint8_t elf_data = file->values[5];  // EI_DATA: 1 = little, 2 = big
+    
+    file->is_big_endian = (elf_data == 2) ? 1 : 0;
+    
+    int swap = 0;
+    #if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+        swap = !file->is_big_endian;
+    #else
+        swap = file->is_big_endian;
+    #endif
+    
+    uint16_t machine = read16(&file->values[0x12], swap);
 
     if (elf_class == 1) file->bits = 32;
     else if (elf_class == 2) file->bits = 64;
@@ -477,6 +547,239 @@ void detect_elf_arch(file_t *file) {
         case 0xF3: file->arch = ARCH_RISCV; break;
         default:   file->arch = ARCH_UNKNOWN; break;
     }
+}
+
+void parse_elf_sections(file_t *file) {
+    uint8_t *data = file->values;
+    
+    // Determine if we need byte swapping
+    int swap = 0;
+    #if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+        swap = !file->is_big_endian;
+    #else
+        swap = file->is_big_endian;
+    #endif
+    
+    if (file->bits == 32) {
+        // ELF32
+        uint32_t shoff = read32(&data[0x20], swap);        // Section header offset
+        uint16_t shentsize = read16(&data[0x2E], swap);    // Section header entry size
+        uint16_t shnum = read16(&data[0x30], swap);        // Number of section headers
+        uint16_t shstrndx = read16(&data[0x32], swap);     // Section name string table index
+        
+        // Validation: check if section headers are within file
+        if (shoff == 0 || shoff >= file->file_size) {
+            file->num_of_sections = 0;
+            return;
+        }
+        if (shoff + (uint64_t)shnum * shentsize > file->file_size) {
+            file->num_of_sections = 0;
+            return;
+        }
+        
+        file->num_of_sections = shnum;
+        file->sections = calloc(shnum, sizeof(section_t));
+        if (!file->sections) return;
+        
+        // Get string table section offset
+        if (shstrndx >= shnum) {
+            free(file->sections);
+            file->sections = NULL;
+            file->num_of_sections = 0;
+            return;
+        }
+        
+        uint32_t strtab_offset = read32(&data[shoff + shstrndx * shentsize + 0x10], swap);
+        
+        // Validate string table offset
+        if (strtab_offset >= file->file_size) {
+            free(file->sections);
+            file->sections = NULL;
+            file->num_of_sections = 0;
+            return;
+        }
+        
+        for (int i = 0; i < shnum; i++) {
+            uint32_t sh_base = shoff + i * shentsize;
+            
+            uint32_t name_idx = read32(&data[sh_base + 0x00], swap);
+            uint32_t sh_type = read32(&data[sh_base + 0x04], swap);
+            uint32_t sh_flags = read32(&data[sh_base + 0x08], swap);
+            uint32_t sh_addr = read32(&data[sh_base + 0x0C], swap);
+            uint32_t sh_offset = read32(&data[sh_base + 0x10], swap);
+            uint32_t sh_size = read32(&data[sh_base + 0x14], swap);
+            uint32_t sh_addralign = read32(&data[sh_base + 0x20], swap);
+            
+            // Copy section name with validation
+            if (strtab_offset + name_idx < file->file_size) {
+                char *name_ptr = (char*)&data[strtab_offset + name_idx];
+                size_t max_len = file->file_size - (strtab_offset + name_idx);
+                size_t copy_len = (max_len < 15) ? max_len : 15;
+                strncpy(file->sections[i].name, name_ptr, copy_len);
+                file->sections[i].name[15] = '\0';
+            } else {
+                strcpy(file->sections[i].name, "<invalid>");
+            }
+            
+            file->sections[i].type = sh_type;
+            file->sections[i].vaddr = sh_addr;
+            file->sections[i].raw_offset = sh_offset;
+            file->sections[i].raw_size = sh_size;
+            file->sections[i].align = sh_addralign;
+            
+            // Convert ELF flags to our flags (corrected)
+            file->sections[i].flags = 0;
+            if (sh_flags & SHF_ALLOC) {
+                file->sections[i].flags |= SEC_ALLOC;
+                file->sections[i].flags |= SEC_READ;  // Allocated sections are readable
+            }
+            if (sh_flags & SHF_WRITE) file->sections[i].flags |= SEC_WRITE;
+            if (sh_flags & SHF_EXECINSTR) file->sections[i].flags |= SEC_EXEC;
+            
+            // Load section data into memory
+            file->sections[i].data = NULL;
+            if (sh_type != SHT_NOBITS && sh_size > 0) {
+                // Validate section bounds
+                if (sh_offset < file->file_size && 
+                    sh_offset + sh_size <= file->file_size) {
+                    file->sections[i].data = malloc(sh_size);
+                    if (file->sections[i].data) {
+                        memcpy(file->sections[i].data, &data[sh_offset], sh_size);
+                    }
+                }
+            } else if (sh_type == SHT_NOBITS && sh_size > 0) {
+                // .bss section - allocate zeroed memory
+                file->sections[i].data = calloc(1, sh_size);
+            }
+        }
+        
+        file->entry_address = read32(&data[0x18], swap);
+        
+    } else if (file->bits == 64) {
+        // ELF64
+        uint64_t shoff = read64(&data[0x28], swap);        // Section header offset
+        uint16_t shentsize = read16(&data[0x3A], swap);    // Section header entry size
+        uint16_t shnum = read16(&data[0x3C], swap);        // Number of section headers
+        uint16_t shstrndx = read16(&data[0x3E], swap);     // Section name string table index
+        
+        // Validation: check if section headers are within file
+        if (shoff == 0 || shoff >= file->file_size) {
+            file->num_of_sections = 0;
+            return;
+        }
+        if (shoff + (uint64_t)shnum * shentsize > file->file_size) {
+            file->num_of_sections = 0;
+            return;
+        }
+        
+        file->num_of_sections = shnum;
+        file->sections = calloc(shnum, sizeof(section_t));
+        if (!file->sections) return;
+        
+        // Get string table section offset
+        if (shstrndx >= shnum) {
+            free(file->sections);
+            file->sections = NULL;
+            file->num_of_sections = 0;
+            return;
+        }
+        
+        uint64_t strtab_offset = read64(&data[shoff + shstrndx * shentsize + 0x18], swap);
+        
+        // Validate string table offset
+        if (strtab_offset >= file->file_size) {
+            free(file->sections);
+            file->sections = NULL;
+            file->num_of_sections = 0;
+            return;
+        }
+        
+        for (int i = 0; i < shnum; i++) {
+            uint64_t sh_base = shoff + i * shentsize;
+            
+            uint32_t name_idx = read32(&data[sh_base + 0x00], swap);
+            uint32_t sh_type = read32(&data[sh_base + 0x04], swap);
+            uint64_t sh_flags = read64(&data[sh_base + 0x08], swap);
+            uint64_t sh_addr = read64(&data[sh_base + 0x10], swap);
+            uint64_t sh_offset = read64(&data[sh_base + 0x18], swap);
+            uint64_t sh_size = read64(&data[sh_base + 0x20], swap);
+            uint64_t sh_addralign = read64(&data[sh_base + 0x30], swap);
+            
+            // Copy section name with validation
+            if (strtab_offset + name_idx < file->file_size) {
+                char *name_ptr = (char*)&data[strtab_offset + name_idx];
+                size_t max_len = file->file_size - (strtab_offset + name_idx);
+                size_t copy_len = (max_len < 15) ? max_len : 15;
+                strncpy(file->sections[i].name, name_ptr, copy_len);
+                file->sections[i].name[15] = '\0';
+            } else {
+                strcpy(file->sections[i].name, "<invalid>");
+            }
+            
+            file->sections[i].type = sh_type;
+            file->sections[i].vaddr = (uint32_t)sh_addr;  // Truncate for display
+            file->sections[i].raw_offset = (uint32_t)sh_offset;
+            file->sections[i].raw_size = (uint32_t)sh_size;
+            file->sections[i].align = (uint32_t)sh_addralign;
+            
+            // Convert ELF flags to our flags (corrected)
+            file->sections[i].flags = 0;
+            if (sh_flags & SHF_ALLOC) {
+                file->sections[i].flags |= SEC_ALLOC;
+                file->sections[i].flags |= SEC_READ;  // Allocated sections are readable
+            }
+            if (sh_flags & SHF_WRITE) file->sections[i].flags |= SEC_WRITE;
+            if (sh_flags & SHF_EXECINSTR) file->sections[i].flags |= SEC_EXEC;
+            
+            // Load section data into memory
+            file->sections[i].data = NULL;
+            if (sh_type != SHT_NOBITS && sh_size > 0 && sh_size < 0xFFFFFFFF) {
+                // Validate section bounds
+                if (sh_offset < file->file_size && 
+                    sh_offset + sh_size <= file->file_size) {
+                    file->sections[i].data = malloc((size_t)sh_size);
+                    if (file->sections[i].data) {
+                        memcpy(file->sections[i].data, &data[sh_offset], (size_t)sh_size);
+                    }
+                }
+            } else if (sh_type == SHT_NOBITS && sh_size > 0 && sh_size < 0xFFFFFFFF) {
+                // .bss section - allocate zeroed memory
+                file->sections[i].data = calloc(1, (size_t)sh_size);
+            }
+        }
+        
+        // Read 64-bit entry point correctly
+        uint64_t entry64 = read64(&data[0x18], swap);
+        file->entry_address = (uint32_t)entry64;  // Truncate for 32-bit display
+    }
+}
+
+uint16_t read16(uint8_t *data, int swap) {
+    uint16_t val = *(uint16_t*)data;
+    if (swap) {
+        return ((val & 0xFF) << 8) | ((val >> 8) & 0xFF);
+    }
+    return val;
+}
+
+uint32_t read32(uint8_t *data, int swap) {
+    uint32_t val = *(uint32_t*)data;
+    if (swap) {
+        return ((val & 0xFF) << 24) | ((val & 0xFF00) << 8) |
+               ((val >> 8) & 0xFF00) | ((val >> 24) & 0xFF);
+    }
+    return val;
+}
+
+uint64_t read64(uint8_t *data, int swap) {
+    uint64_t val = *(uint64_t*)data;
+    if (swap) {
+        return ((val & 0xFFULL) << 56) | ((val & 0xFF00ULL) << 40) |
+               ((val & 0xFF0000ULL) << 24) | ((val & 0xFF000000ULL) << 8) |
+               ((val >> 8) & 0xFF000000ULL) | ((val >> 24) & 0xFF0000ULL) |
+               ((val >> 40) & 0xFF00ULL) | ((val >> 56) & 0xFFULL);
+    }
+    return val;
 }
 
 void detect_pe_arch(file_t *file) {
@@ -511,6 +814,301 @@ void detect_pe_arch(file_t *file) {
     }
 }
 
+void parse_pe_sections(file_t *file) {
+    uint8_t *data = file->values;
+    uint32_t pe_offset = *(uint32_t*)&data[0x3C];
+    
+    // Get number of sections
+    uint16_t num_sections = *(uint16_t*)&data[pe_offset + 6];
+    uint16_t opt_hdr_size = *(uint16_t*)&data[pe_offset + 20];
+    
+    file->num_of_sections = num_sections;
+    file->sections = malloc(sizeof(section_t) * num_sections);
+    if (!file->sections) return;
+    
+    // Section table starts after optional header
+    uint32_t section_table = pe_offset + 24 + opt_hdr_size;
+    
+    // Get entry point (AddressOfEntryPoint from optional header)
+    if (opt_hdr_size > 0) {
+        file->entry_address = *(uint32_t*)&data[pe_offset + 24 + 16];
+    }
+    
+    for (int i = 0; i < num_sections; i++) {
+        uint32_t section_base = section_table + i * 40; // each section (each entry is 40 bytes)
+        
+        strncpy(file->sections[i].name, (char*)&data[section_base], 8);
+        file->sections[i].name[8] = '\0';
+        
+        uint32_t virtual_size = *(uint32_t*)&data[section_base + 8];
+        uint32_t virtual_addr = *(uint32_t*)&data[section_base + 12];
+        uint32_t raw_size = *(uint32_t*)&data[section_base + 16];
+        uint32_t raw_offset = *(uint32_t*)&data[section_base + 20];
+        uint32_t characteristics = *(uint32_t*)&data[section_base + 36];
+        
+        file->sections[i].type = SHT_PROGBITS;  // PE doesn't have type field, default to PROGBITS
+        file->sections[i].vaddr = virtual_addr;
+        file->sections[i].raw_offset = raw_offset;
+        file->sections[i].raw_size = raw_size;
+        file->sections[i].align = 0; // PE alignment is in the optional header
+        file->sections[i].data = NULL;  // pr sections are not loaded yet
+        
+        file->sections[i].flags = 0;
+        if (characteristics & 0x02000000) file->sections[i].flags |= SEC_EXEC;   // IMAGE_SCN_MEM_EXECUTE
+        if (characteristics & 0x40000000) file->sections[i].flags |= SEC_READ;   // IMAGE_SCN_MEM_READ
+        if (characteristics & 0x80000000) file->sections[i].flags |= SEC_WRITE;  // IMAGE_SCN_MEM_WRITE
+        if (characteristics & 0x20000000) file->sections[i].flags |= SEC_ALLOC;  // IMAGE_SCN_MEM_EXECUTE (treated as alloc)
+    }
+}
+
+void parse_pe_functions(file_t *file) {
+    uint8_t *data = file->values;
+    uint32_t pe_offset = *(uint32_t*)&data[0x3C];
+    uint16_t opt_hdr_size = *(uint16_t*)&data[pe_offset + 20];
+    
+    if (opt_hdr_size == 0) return;
+    
+    // Get the image base and export table RVA from optional header
+    uint32_t opt_hdr_base = pe_offset + 24;
+    uint32_t image_base = 0;
+    uint32_t export_rva = 0;
+    uint32_t export_size = 0;
+    
+    // Check magic number to determine PE32 or PE32+
+    uint16_t magic = *(uint16_t*)&data[opt_hdr_base];
+    
+    if (magic == 0x10B) { // PE32
+        image_base = *(uint32_t*)&data[opt_hdr_base + 28];
+        export_rva = *(uint32_t*)&data[opt_hdr_base + 96];  // Export Table RVA
+        export_size = *(uint32_t*)&data[opt_hdr_base + 100]; // Export Table Size
+    } else if (magic == 0x20B) { // PE32+
+        image_base = *(uint32_t*)&data[opt_hdr_base + 24]; // Lower 32 bits
+        export_rva = *(uint32_t*)&data[opt_hdr_base + 112]; // Export Table RVA
+        export_size = *(uint32_t*)&data[opt_hdr_base + 116]; // Export Table Size
+    }
+    
+    if (export_rva == 0 || export_size == 0) {
+        file->num_of_functions = 0;
+        file->functions = NULL;
+        return;
+    }
+    
+    // Convert RVA to file offset
+    uint32_t export_offset = 0;
+    for (int i = 0; i < file->num_of_sections; i++) {
+        section_t *s = &file->sections[i];
+        if (export_rva >= s->vaddr && export_rva < s->vaddr + s->raw_size) {
+            export_offset = s->raw_offset + (export_rva - s->vaddr);
+            break;
+        }
+    }
+    
+    if (export_offset == 0 || export_offset >= file->file_size) {
+        file->num_of_functions = 0;
+        file->functions = NULL;
+        return;
+    }
+    
+    // Parse export directory
+    uint32_t num_of_names = *(uint32_t*)&data[export_offset + 24];
+    uint32_t addr_of_funcs_rva = *(uint32_t*)&data[export_offset + 28];
+    uint32_t addr_of_names_rva = *(uint32_t*)&data[export_offset + 32];
+    uint32_t addr_of_ords_rva = *(uint32_t*)&data[export_offset + 36];
+    
+    if (num_of_names == 0) {
+        file->num_of_functions = 0;
+        file->functions = NULL;
+        return;
+    }
+    
+    file->num_of_functions = num_of_names;
+    file->functions = malloc(sizeof(function_t) * num_of_names);
+    if (!file->functions) return;
+    
+    // Convert RVAs to file offsets
+    uint32_t names_offset = 0, funcs_offset = 0;
+    for (int i = 0; i < file->num_of_sections; i++) {
+        section_t *s = &file->sections[i];
+        if (addr_of_names_rva >= s->vaddr && addr_of_names_rva < s->vaddr + s->raw_size) {
+            names_offset = s->raw_offset + (addr_of_names_rva - s->vaddr);
+        }
+        if (addr_of_funcs_rva >= s->vaddr && addr_of_funcs_rva < s->vaddr + s->raw_size) {
+            funcs_offset = s->raw_offset + (addr_of_funcs_rva - s->vaddr);
+        }
+    }
+    
+    // Read function names and addresses
+    for (uint32_t i = 0; i < num_of_names; i++) {
+        // Get name RVA
+        uint32_t name_rva = *(uint32_t*)&data[names_offset + i * 4];
+        
+        // Convert name RVA to file offset
+        uint32_t name_offset = 0;
+        for (int j = 0; j < file->num_of_sections; j++) {
+            section_t *s = &file->sections[j];
+            if (name_rva >= s->vaddr && name_rva < s->vaddr + s->raw_size) {
+                name_offset = s->raw_offset + (name_rva - s->vaddr);
+                break;
+            }
+        }
+        
+        // Copy function name
+        if (name_offset > 0 && name_offset < file->file_size) {
+            strncpy(file->functions[i].name, (char*)&data[name_offset], 255);
+            file->functions[i].name[255] = '\0';
+        } else {
+            strcpy(file->functions[i].name, "<unknown>");
+        }
+        
+        // Get function address
+        uint32_t func_rva = *(uint32_t*)&data[funcs_offset + i * 4];
+        file->functions[i].rva = func_rva;
+        file->functions[i].address = image_base + func_rva;
+    }
+}
+
+void parse_elf_functions(file_t *file) {
+    // Find .symtab or .dynsym section and corresponding string table
+    section_t *symtab = NULL;
+    section_t *strtab = NULL;
+    int symtab_idx = -1;
+    
+    // First try to find .symtab (static symbol table)
+    for (int i = 0; i < file->num_of_sections; i++) {
+        if (strcmp(file->sections[i].name, ".symtab") == 0) {
+            symtab = &file->sections[i];
+            symtab_idx = i;
+            break;
+        }
+    }
+    
+    // If no .symtab, try .dynsym (dynamic symbol table)
+    if (!symtab) {
+        for (int i = 0; i < file->num_of_sections; i++) {
+            if (strcmp(file->sections[i].name, ".dynsym") == 0) {
+                symtab = &file->sections[i];
+                symtab_idx = i;
+                break;
+            }
+        }
+    }
+    
+    if (!symtab || !symtab->data) {
+        file->num_of_functions = 0;
+        file->functions = NULL;
+        return;
+    }
+    
+    // Find corresponding string table
+    // For ELF, the sh_link field points to the string table section
+    // We need to parse this from the section header
+    uint8_t *data = file->values;
+    int swap = 0;
+    #if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+        swap = !file->is_big_endian;
+    #else
+        swap = file->is_big_endian;
+    #endif
+    
+    uint32_t strtab_idx = 0;
+    if (file->bits == 64) {
+        uint64_t shoff = read64(&data[0x28], swap);
+        uint16_t shentsize = read16(&data[0x3A], swap);
+        uint64_t sh_base = shoff + symtab_idx * shentsize;
+        strtab_idx = read32(&data[sh_base + 0x28], swap);  // sh_link at offset 0x28 in 64-bit
+    } else {
+        uint32_t shoff = read32(&data[0x20], swap);
+        uint16_t shentsize = read16(&data[0x2E], swap);
+        uint32_t sh_base = shoff + symtab_idx * shentsize;
+        strtab_idx = read32(&data[sh_base + 0x18], swap);  // sh_link at offset 0x18 in 32-bit
+    }
+    
+    if (strtab_idx >= file->num_of_sections) {
+        file->num_of_functions = 0;
+        file->functions = NULL;
+        return;
+    }
+    
+    strtab = &file->sections[strtab_idx];
+    if (!strtab->data) {
+        file->num_of_functions = 0;
+        file->functions = NULL;
+        return;
+    }
+    
+    // Calculate number of symbols
+    size_t sym_size = (file->bits == 64) ? 24 : 16;  // ELF64_Sym = 24 bytes, ELF32_Sym = 16 bytes
+    size_t num_symbols = symtab->raw_size / sym_size;
+    
+    // First pass: count function symbols
+    int func_count = 0;
+    for (size_t i = 0; i < num_symbols; i++) {
+        uint8_t *sym_data = &symtab->data[i * sym_size];
+        uint8_t st_info;
+        
+        if (file->bits == 64) {
+            st_info = sym_data[4];  // st_info is at offset 4 in ELF64
+        } else {
+            st_info = sym_data[12]; // st_info is at offset 12 in ELF32
+        }
+        
+        uint8_t st_type = st_info & 0xF;
+        // STT_FUNC = 2
+        if (st_type == 2) {
+            func_count++;
+        }
+    }
+    
+    if (func_count == 0) {
+        file->num_of_functions = 0;
+        file->functions = NULL;
+        return;
+    }
+    
+    // Allocate function array
+    file->num_of_functions = func_count;
+    file->functions = malloc(sizeof(function_t) * func_count);
+    if (!file->functions) {
+        file->num_of_functions = 0;
+        return;
+    }
+    
+    // Second pass: extract function symbols
+    int func_idx = 0;
+    for (size_t i = 0; i < num_symbols && func_idx < func_count; i++) {
+        uint8_t *sym_data = &symtab->data[i * sym_size];
+        uint8_t st_info;
+        uint32_t st_name;
+        uint64_t st_value;
+        
+        if (file->bits == 64) {
+            st_name = read32(&sym_data[0], swap);
+            st_info = sym_data[4];
+            st_value = read64(&sym_data[8], swap);
+        } else {
+            st_name = read32(&sym_data[0], swap);
+            st_value = read32(&sym_data[4], swap);
+            st_info = sym_data[12];
+        }
+        
+        uint8_t st_type = st_info & 0xF;
+        if (st_type == 2) {  // STT_FUNC
+            // Get function name from string table
+            if (st_name < strtab->raw_size) {
+                char *name_ptr = (char*)&strtab->data[st_name];
+                strncpy(file->functions[func_idx].name, name_ptr, 255);
+                file->functions[func_idx].name[255] = '\0';
+            } else {
+                strcpy(file->functions[func_idx].name, "<invalid>");
+            }
+            
+            file->functions[func_idx].rva = (uint32_t)st_value;
+            file->functions[func_idx].address = (uint32_t)st_value;
+            func_idx++;
+        }
+    }
+}
+
 void check_for_file_type(file_t * file){
     int elf[] = {0x7f,0x45,0x4c,0x46}; // 0x7f E L F (Linux)
     int pe[] = {0x4d,0x5a}; // M Z (Windows)
@@ -523,6 +1121,8 @@ void check_for_file_type(file_t * file){
     if (check == 4){
         file->f_type = ELF;
         detect_elf_arch(file);
+        parse_elf_sections(file);
+        parse_elf_functions(file);
         return;
     }
     check = 0;  
@@ -533,6 +1133,8 @@ void check_for_file_type(file_t * file){
     if (check == 2){
         file->f_type = PE;
         detect_pe_arch(file);
+        parse_pe_sections(file);
+        parse_pe_functions(file);
         return;
     }
     file->f_type = UNKNOWN;
@@ -569,6 +1171,74 @@ void display_file_info(file_t * file){
         printf("Bit Width: %d-bit\n", file->bits);
     }
     
+    if (file->entry_address > 0) {
+        printf("Entry Point: 0x%08x\n", file->entry_address);
+    }
+    
+    printf("==========================\n\n");
+}
+
+void display_sections(file_t *file) {
+    if (file->num_of_sections == 0) {
+        printf("No sections found.\n\n");
+        return;
+    }
+    
+    printf("==== SECTIONS (%d) ====\n", file->num_of_sections);
+    printf("%-16s %-10s %-10s %-10s %-10s %-8s\n", "Name", "Type", "VirtAddr", "Offset", "Size", "Flags");
+    printf("------------------------------------------------------------------------------------\n");
+    
+    for (int i = 0; i < file->num_of_sections; i++) {
+        section_t *s = &file->sections[i];
+        
+        const char *type_str = "UNKNOWN";
+        switch(s->type) {
+            case SHT_NULL:     type_str = "NULL"; break;
+            case SHT_PROGBITS: type_str = "PROGBITS"; break;
+            case SHT_SYMTAB:   type_str = "SYMTAB"; break;
+            case SHT_STRTAB:   type_str = "STRTAB"; break;
+            case SHT_RELA:     type_str = "RELA"; break;
+            case SHT_NOBITS:   type_str = "NOBITS"; break;
+            case SHT_REL:      type_str = "REL"; break;
+            case SHT_DYNSYM:   type_str = "DYNSYM"; break;
+            case SHT_DYNAMIC:  type_str = "DYNAMIC"; break;
+            case SHT_NOTE:     type_str = "NOTE"; break;
+        }
+        
+        char flags[16] = "";
+        if (s->flags & SEC_READ)  strcat(flags, "R");
+        if (s->flags & SEC_WRITE) strcat(flags, "W");
+        if (s->flags & SEC_EXEC)  strcat(flags, "X");
+        if (s->flags & SEC_ALLOC) strcat(flags, "A");
+        if (flags[0] == '\0') strcpy(flags, "-");
+        
+        printf("%-16s %-10s 0x%08x 0x%08x 0x%08x %-8s", 
+               s->name, type_str, s->vaddr, s->raw_offset, s->raw_size, flags);
+        
+        if (s->data != NULL) {
+            printf(" [VERIFICATION DONE]");
+        }
+        printf("\n");
+    }
+    
+    printf("==========================\n\n");
+}
+
+void display_functions(file_t *file) {
+    if (file->num_of_functions == 0) {
+        printf("No exported functions found.\n\n");
+        return;
+    }
+    
+    printf("==== EXPORTED FUNCTIONS (%d) ====\n", file->num_of_functions);
+    printf("%-50s %-12s %-12s\n", "Function Name", "RVA", "Address");
+    printf("--------------------------------------------------------------------------------\n");
+    
+    for (int i = 0; i < file->num_of_functions; i++) {
+        function_t *f = &file->functions[i];
+        printf("%-50s 0x%08x   0x%08x\n", f->name, f->rva, f->address);
+    }
+    
     printf("==========================\n\n");
 }
 
@@ -591,6 +1261,8 @@ int main(int argc, char ** argv){
 
     check_for_file_type(file);
     display_file_info(file);
+    display_sections(file);
+    display_functions(file);
 
     
 
@@ -599,6 +1271,20 @@ int main(int argc, char ** argv){
         get_opcode(&cpu, file);
     }
 
+    // Cleanup
+    if (file->sections) {
+        for (int i = 0; i < file->num_of_sections; i++) {
+            if (file->sections[i].data) {
+                free(file->sections[i].data);
+            }
+        }
+        free(file->sections);
+    }
+    if (file->functions) {
+        free(file->functions);
+    }
+    free(file->values);
+    free(file);
 
     exit(EXIT_SUCCESS);
 }

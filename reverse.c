@@ -410,29 +410,144 @@ file_t * assign_values(FILE * fileptr){
 }
 
 typedef struct {
-    char * initial;
-    char * dest;
+    char reg_operand[64];   // The 'reg' field (middle 3 bits) - typically source/register
+    char rm_operand[64];    // The 'r/m' field (last 3 bits) - typically destination/register or memory
 } mod_rm_registers ;
 
-mod_rm_registers *  fill_mod_rm(uint8_t modrm,instruction * ins,file_t * file){
+const char *reg_names_8bit[] = {"AL", "CL", "DL", "BL", "AH", "CH", "DH", "BH"};
+const char *reg_names_16bit[] = {"AX", "CX", "DX", "BX", "SP", "BP", "SI", "DI"};
+const char *reg_names_32bit[] = {"EAX", "ECX", "EDX", "EBX", "ESP", "EBP", "ESI", "EDI"};
+
+char* decode_sib(uint8_t sib, uint8_t mod, file_t *file, size_t offset, char *output) {
+    uint8_t scale = (sib >> 6) & 0x3;
+    uint8_t index = (sib >> 3) & 0x7;
+    uint8_t base = sib & 0x7;
+    
+    const char *scale_str[] = {"", "*2", "*4", "*8"};
+    
+    // Start building the SIB expression
+    output[0] = '\0';
+    strcat(output, "[");
+    
+    // Base register
+    if (mod == 0 && base == 5) {
+        // Special case: disp32 with no base
+        uint32_t disp = *(uint32_t*)&file->values[offset];
+        sprintf(output + strlen(output), "0x%x", disp);
+    } else {
+        strcat(output, reg_names_32bit[base]);
+    }
+    
+    // Index register
+    if (index != 4) { // ESP cannot be an index
+        if (mod != 0 || base != 5) strcat(output, "+");
+        strcat(output, reg_names_32bit[index]);
+        strcat(output, scale_str[scale]);
+    }
+    
+    strcat(output, "]");
+    return output;
+}
+
+mod_rm_registers *  fill_mod_rm(uint8_t modrm, cpu_instruction *cpu, file_t *file){
     uint8_t mod = (modrm >> 6) & 0x3;
-    uint8_t r = ( modrm >> 3) & 0b00000111;
-    uint8_t rm  = modrm & 0b00000111;
+    uint8_t reg = (modrm >> 3) & 0x7;
+    uint8_t rm  = modrm & 0x7;
 
-    if (file->bits == 32){
-        mod_rm_registers * pre_modrm = malloc(sizeof(mod_rm_registers));
-        pre_modrm->initial = mod_rm[0][r][mod];
-        pre_modrm->dest = mod_rm[0][rm][mod];
-        return pre_modrm;
+    mod_rm_registers *result = malloc(sizeof(mod_rm_registers));
+    if (!result) return NULL;
+    
+    size_t offset = cpu->pc + 2; 
+    
+    if (file->bits == 64) {
+        strcpy(result->reg_operand, reg_names_32bit[reg]);
+    } else {
+        strcpy(result->reg_operand, reg_names_16bit[reg]);
     }
-    else if (file->bits == 64)
-    {
-        mod_rm_registers * pre_modrm = malloc(sizeof(mod_rm_registers));
-        pre_modrm->initial = mod_rm[1][r][mod];
-        pre_modrm->dest = mod_rm[1][rm][mod];
-        return pre_modrm;
+    
+    if (mod == 3) {
+        // reg
+        if (file->bits == 64) {
+            strcpy(result->rm_operand, reg_names_32bit[rm]);
+        } else {
+            strcpy(result->rm_operand, reg_names_16bit[rm]);
+        }
+    } else {
+        // mem mode
+        if (file->bits == 64) {
+            // 32-bit addressing
+            if (rm == 4) {
+                // sib byte follows
+                if (offset < file->file_size) {
+                    uint8_t sib = file->values[offset];
+                    offset++;
+                    decode_sib(sib, mod, file, offset, result->rm_operand);
+                    
+                    // add disp if needed
+                    uint8_t base = sib & 0x7;
+                    if (mod == 1) {
+                        int8_t disp = (int8_t)file->values[offset];
+                        if (disp != 0) {
+                            sprintf(result->rm_operand + strlen(result->rm_operand) - 1, "%+d]", disp);
+                        }
+                    } else if (mod == 2 || (mod == 0 && base == 5)) {
+                        int32_t disp = *(int32_t*)&file->values[offset];
+                        if (disp != 0 || (mod == 0 && base == 5)) {
+                            sprintf(result->rm_operand + strlen(result->rm_operand) - 1, "%+d]", disp);
+                        }
+                    }
+                }
+            } else if (mod == 0 && rm == 5) {
+                // disp32 only
+                uint32_t disp = *(uint32_t*)&file->values[offset];
+                sprintf(result->rm_operand, "[0x%x]", disp);
+            } else {
+                // Reg + disp
+                sprintf(result->rm_operand, "[%s", reg_names_32bit[rm]);
+                
+                if (mod == 1) {
+                    int8_t disp = (int8_t)file->values[offset];
+                    if (disp != 0) {
+                        sprintf(result->rm_operand + strlen(result->rm_operand), "%+d", disp);
+                    }
+                } else if (mod == 2) {
+                    int32_t disp = *(int32_t*)&file->values[offset];
+                    if (disp != 0) {
+                        sprintf(result->rm_operand + strlen(result->rm_operand), "%+d", disp);
+                    }
+                }
+                strcat(result->rm_operand, "]");
+            }
+        } else {
+            // 16-bit addressing
+            const char *rm16_addr[] = {
+                "[BX+SI", "[BX+DI", "[BP+SI", "[BP+DI",
+                "[SI", "[DI", "[BP", "[BX"
+            };
+            
+            if (mod == 0 && rm == 6) {
+                uint16_t disp = *(uint16_t*)&file->values[offset];
+                sprintf(result->rm_operand, "[0x%x]", disp);
+            } else {
+                strcpy(result->rm_operand, rm16_addr[rm]);
+                
+                if (mod == 1) {
+                    int8_t disp = (int8_t)file->values[offset];
+                    if (disp != 0) {
+                        sprintf(result->rm_operand + strlen(result->rm_operand), "%+d", disp);
+                    }
+                } else if (mod == 2) {
+                    int16_t disp = *(int16_t*)&file->values[offset];
+                    if (disp != 0) {
+                        sprintf(result->rm_operand + strlen(result->rm_operand), "%+d", disp);
+                    }
+                }
+                strcat(result->rm_operand, "]");
+            }
+        }
     }
-
+    
+    return result;
 }
 
 size_t get_immediate_offset(cpu_instruction *cpu, file_t *file, instruction *ins) {
@@ -553,25 +668,32 @@ void get_opcode(cpu_instruction *cpu, file_t *file) {
 
     
     if (ins.mnemonic == NULL) {
-        printf("%04zx: %02x   UNKNOWN (bytes: 1)\n", cpu->pc, op);
+        printf("%04zx: %02x      UNKNOWN\n", cpu->pc, op);
         cpu->pc += 1;
         return;
     }
-    // has modrm
     if (ins.has_modrm && cpu->pc + 1 < file->file_size) {
         uint8_t modrm = file->values[cpu->pc + ins.opcode_len];
-        mod_rm_registers *modrm_info = fill_mod_rm(modrm, &ins, file);
-        if (modrm_info) { // if null
-            printf("%04zx: %02x %02x %s (bytes: %d) [%s, %s]\n", 
-                   cpu->pc, op, modrm, ins.mnemonic, ins.pc_increment,
-                   modrm_info->dest, modrm_info->initial);
+        mod_rm_registers *modrm_info = fill_mod_rm(modrm, cpu, file);
+        if (modrm_info) {
+            char inst_name[32];
+            const char *space = strchr(ins.mnemonic, ' ');
+            if (space) {
+                size_t len = space - ins.mnemonic;
+                strncpy(inst_name, ins.mnemonic, len);
+                inst_name[len] = '\0';
+            } else {
+                strcpy(inst_name, ins.mnemonic);
+            }
+            printf("%04zx: %02x %02x %-8s %s, %s\n", 
+                   cpu->pc, op, modrm, inst_name,
+                   modrm_info->rm_operand, modrm_info->reg_operand);
             free(modrm_info);
         } else {
-            printf("%04zx: %02x   %s (bytes: %d)\n", cpu->pc, op, ins.mnemonic, ins.pc_increment);
+            printf("%04zx: %02x    %-20s\n", cpu->pc, op, ins.mnemonic);
         }
-    } else // no modrm
-    {
-        printf("%04zx: %02x   %s (bytes: %d)\n", cpu->pc, op, ins.mnemonic, ins.pc_increment);
+    } else {
+        printf("%04zx: %02x    %-20s\n", cpu->pc, op, ins.mnemonic);
     }
     
     cpu->pc += ins.pc_increment;
@@ -685,19 +807,16 @@ void parse_elf_sections(file_t *file) {
             file->sections[i].raw_size = sh_size;
             file->sections[i].align = sh_addralign;
             
-            // Convert ELF flags to our flags (corrected)
             file->sections[i].flags = 0;
             if (sh_flags & SHF_ALLOC) {
                 file->sections[i].flags |= SEC_ALLOC;
-                file->sections[i].flags |= SEC_READ;  // Allocated sections are readable
+                file->sections[i].flags |= SEC_READ;  
             }
             if (sh_flags & SHF_WRITE) file->sections[i].flags |= SEC_WRITE;
             if (sh_flags & SHF_EXECINSTR) file->sections[i].flags |= SEC_EXEC;
             
-            // Load section data into memory
             file->sections[i].data = NULL;
             if (sh_type != SHT_NOBITS && sh_size > 0) {
-                // Validate section bounds
                 if (sh_offset < file->file_size && 
                     sh_offset + sh_size <= file->file_size) {
                     file->sections[i].data = malloc(sh_size);
@@ -715,12 +834,12 @@ void parse_elf_sections(file_t *file) {
         
     } else if (file->bits == 64) {
         // ELF64
-        uint64_t shoff = read64(&data[0x28], swap);        // Section header offset
-        uint16_t shentsize = read16(&data[0x3A], swap);    // Section header entry size
-        uint16_t shnum = read16(&data[0x3C], swap);        // Number of section headers
-        uint16_t shstrndx = read16(&data[0x3E], swap);     // Section name string table index
+        uint64_t shoff = read64(&data[0x28], swap);        // section header offset
+        uint16_t shentsize = read16(&data[0x3A], swap);    // section header entry size
+        uint16_t shnum = read16(&data[0x3C], swap);        // num of section headers
+        uint16_t shstrndx = read16(&data[0x3E], swap);     // section name string table index
         
-        // Validation: check if section headers are within file
+        // validation: check if section headers are within file
         if (shoff == 0 || shoff >= file->file_size) {
             file->num_of_sections = 0;
             return;
@@ -734,7 +853,7 @@ void parse_elf_sections(file_t *file) {
         file->sections = calloc(shnum, sizeof(section_t));
         if (!file->sections) return;
         
-        // Get string table section offset
+        // get string table section offset
         if (shstrndx >= shnum) {
             free(file->sections);
             file->sections = NULL;
@@ -744,7 +863,7 @@ void parse_elf_sections(file_t *file) {
         
         uint64_t strtab_offset = read64(&data[shoff + shstrndx * shentsize + 0x18], swap);
         
-        // Validate string table offset
+        // validate string table offset
         if (strtab_offset >= file->file_size) {
             free(file->sections);
             file->sections = NULL;
@@ -763,7 +882,7 @@ void parse_elf_sections(file_t *file) {
             uint64_t sh_size = read64(&data[sh_base + 0x20], swap);
             uint64_t sh_addralign = read64(&data[sh_base + 0x30], swap);
             
-            // Copy section name with validation
+            
             if (strtab_offset + name_idx < file->file_size) {
                 char *name_ptr = (char*)&data[strtab_offset + name_idx];
                 size_t max_len = file->file_size - (strtab_offset + name_idx);
@@ -775,24 +894,21 @@ void parse_elf_sections(file_t *file) {
             }
             
             file->sections[i].type = sh_type;
-            file->sections[i].vaddr = (uint32_t)sh_addr;  // Truncate for display
+            file->sections[i].vaddr = (uint32_t)sh_addr; 
             file->sections[i].raw_offset = (uint32_t)sh_offset;
             file->sections[i].raw_size = (uint32_t)sh_size;
             file->sections[i].align = (uint32_t)sh_addralign;
             
-            // Convert ELF flags to our flags (corrected)
             file->sections[i].flags = 0;
             if (sh_flags & SHF_ALLOC) {
                 file->sections[i].flags |= SEC_ALLOC;
-                file->sections[i].flags |= SEC_READ;  // Allocated sections are readable
+                file->sections[i].flags |= SEC_READ; 
             }
             if (sh_flags & SHF_WRITE) file->sections[i].flags |= SEC_WRITE;
             if (sh_flags & SHF_EXECINSTR) file->sections[i].flags |= SEC_EXEC;
             
-            // Load section data into memory
             file->sections[i].data = NULL;
             if (sh_type != SHT_NOBITS && sh_size > 0 && sh_size < 0xFFFFFFFF) {
-                // Validate section bounds
                 if (sh_offset < file->file_size && 
                     sh_offset + sh_size <= file->file_size) {
                     file->sections[i].data = malloc((size_t)sh_size);
@@ -806,9 +922,8 @@ void parse_elf_sections(file_t *file) {
             }
         }
         
-        // Read 64-bit entry point correctly
         uint64_t entry64 = read64(&data[0x18], swap);
-        file->entry_address = (uint32_t)entry64;  // Truncate for 32-bit display
+        file->entry_address = (uint32_t)entry64;  
     }
 }
 
@@ -926,23 +1041,21 @@ void parse_pe_functions(file_t *file) {
     
     if (opt_hdr_size == 0) return;
     
-    // Get the image base and export table RVA from optional header
     uint32_t opt_hdr_base = pe_offset + 24;
     uint32_t image_base = 0;
     uint32_t export_rva = 0;
     uint32_t export_size = 0;
     
-    // Check magic number to determine PE32 or PE32+
     uint16_t magic = *(uint16_t*)&data[opt_hdr_base];
     
     if (magic == 0x10B) { // PE32
         image_base = *(uint32_t*)&data[opt_hdr_base + 28];
-        export_rva = *(uint32_t*)&data[opt_hdr_base + 96];  // Export Table RVA
-        export_size = *(uint32_t*)&data[opt_hdr_base + 100]; // Export Table Size
+        export_rva = *(uint32_t*)&data[opt_hdr_base + 96]; 
+        export_size = *(uint32_t*)&data[opt_hdr_base + 100];
     } else if (magic == 0x20B) { // PE32+
-        image_base = *(uint32_t*)&data[opt_hdr_base + 24]; // Lower 32 bits
-        export_rva = *(uint32_t*)&data[opt_hdr_base + 112]; // Export Table RVA
-        export_size = *(uint32_t*)&data[opt_hdr_base + 116]; // Export Table Size
+        image_base = *(uint32_t*)&data[opt_hdr_base + 24]; 
+        export_rva = *(uint32_t*)&data[opt_hdr_base + 112];
+        export_size = *(uint32_t*)&data[opt_hdr_base + 116];
     }
     
     if (export_rva == 0 || export_size == 0) {
@@ -951,7 +1064,6 @@ void parse_pe_functions(file_t *file) {
         return;
     }
     
-    // Convert RVA to file offset
     uint32_t export_offset = 0;
     for (int i = 0; i < file->num_of_sections; i++) {
         section_t *s = &file->sections[i];
@@ -995,12 +1107,9 @@ void parse_pe_functions(file_t *file) {
         }
     }
     
-    // Read function names and addresses
     for (uint32_t i = 0; i < num_of_names; i++) {
-        // Get name RVA
         uint32_t name_rva = *(uint32_t*)&data[names_offset + i * 4];
         
-        // Convert name RVA to file offset
         uint32_t name_offset = 0;
         for (int j = 0; j < file->num_of_sections; j++) {
             section_t *s = &file->sections[j];
@@ -1010,7 +1119,6 @@ void parse_pe_functions(file_t *file) {
             }
         }
         
-        // Copy function name
         if (name_offset > 0 && name_offset < file->file_size) {
             strncpy(file->functions[i].name, (char*)&data[name_offset], 255);
             file->functions[i].name[255] = '\0';
@@ -1018,7 +1126,6 @@ void parse_pe_functions(file_t *file) {
             strcpy(file->functions[i].name, "<unknown>");
         }
         
-        // Get function address
         uint32_t func_rva = *(uint32_t*)&data[funcs_offset + i * 4];
         file->functions[i].rva = func_rva;
         file->functions[i].address = image_base + func_rva;
@@ -1026,12 +1133,10 @@ void parse_pe_functions(file_t *file) {
 }
 
 void parse_elf_functions(file_t *file) {
-    // Find .symtab or .dynsym section and corresponding string table
     section_t *symtab = NULL;
     section_t *strtab = NULL;
     int symtab_idx = -1;
     
-    // First try to find .symtab (static symbol table)
     for (int i = 0; i < file->num_of_sections; i++) {
         if (strcmp(file->sections[i].name, ".symtab") == 0) {
             symtab = &file->sections[i];
@@ -1040,7 +1145,6 @@ void parse_elf_functions(file_t *file) {
         }
     }
     
-    // If no .symtab, try .dynsym (dynamic symbol table)
     if (!symtab) {
         for (int i = 0; i < file->num_of_sections; i++) {
             if (strcmp(file->sections[i].name, ".dynsym") == 0) {
@@ -1057,9 +1161,7 @@ void parse_elf_functions(file_t *file) {
         return;
     }
     
-    // Find corresponding string table
-    // For ELF, the sh_link field points to the string table section
-    // We need to parse this from the section header
+
     uint8_t *data = file->values;
     int swap = 0;
     #if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
@@ -1094,11 +1196,11 @@ void parse_elf_functions(file_t *file) {
         return;
     }
     
-    // Calculate number of symbols
+    // number of symbols
     size_t sym_size = (file->bits == 64) ? 24 : 16;  // ELF64_Sym = 24 bytes, ELF32_Sym = 16 bytes
     size_t num_symbols = symtab->raw_size / sym_size;
     
-    // First pass: count function symbols
+    // count function symbols
     int func_count = 0;
     for (size_t i = 0; i < num_symbols; i++) {
         uint8_t *sym_data = &symtab->data[i * sym_size];
@@ -1123,7 +1225,7 @@ void parse_elf_functions(file_t *file) {
         return;
     }
     
-    // Allocate function array
+    // function array
     file->num_of_functions = func_count;
     file->functions = malloc(sizeof(function_t) * func_count);
     if (!file->functions) {
@@ -1131,7 +1233,7 @@ void parse_elf_functions(file_t *file) {
         return;
     }
     
-    // Second pass: extract function symbols
+    // extract function symbols
     int func_idx = 0;
     for (size_t i = 0; i < num_symbols && func_idx < func_count; i++) {
         uint8_t *sym_data = &symtab->data[i * sym_size];
@@ -1150,8 +1252,7 @@ void parse_elf_functions(file_t *file) {
         }
         
         uint8_t st_type = st_info & 0xF;
-        if (st_type == 2) {  // STT_FUNC
-            // Get function name from string table
+        if (st_type == 2) { 
             if (st_name < strtab->raw_size) {
                 char *name_ptr = (char*)&strtab->data[st_name];
                 strncpy(file->functions[func_idx].name, name_ptr, 255);

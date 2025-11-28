@@ -354,6 +354,29 @@ instruction opcode_table[256] = {
     [0xA9] = {TEST, "TEST AX/EAX, imm16/32", 3, 1, 0},
 };
 
+char *mod_rm[2][8][4] = {
+    { // 32-bit (16-bit addressing modes)
+        {"[BX+SI]","[BX+SI+DISP8]","[BX+SI+DISP16]","AL/AX"},
+        {"[BX+DI]","[BX+DI+DISP8]","[BX+DI+DISP16]","CL/CX"},
+        {"[BP+SI]","[BP+SI+DISP8]","[BP+SI+DISP16]","DL/DX"},
+        {"[BP+DI]","[BP+DI+DISP8]","[BP+DI+DISP16]","BL/BX"},
+        {"[SI]","[SI+DISP8]","[SI+DISP16]","AH/SP"},
+        {"[DI]","[DI+DISP8]","[DI+DISP16]","CH/BP"},
+        {"[DISP16]","[BP+DISP8]","[BP+DISP16]","DH/SI"},
+        {"[BX]","[BX+DISP8]","[BX+DISP16]","BH/DI"},
+    },
+    {   // 64-bit (32-bit addressing modes)
+        {"[EAX]","[EAX+DISP8]","[EAX+DISP32]","AL/AX/EAX"},
+        {"[ECX]","[ECX+DISP8]","[ECX+DISP32]","CL/CX/ECX"},
+        {"[EDX]","[EDX+DISP8]","[EDX+DISP32]","DL/DX/EDX"},
+        {"[EBX]","[EBX+DISP8]","[EBX+DISP32]","BL/BX/EBX"},
+        {"[SIB]","[SIB+DISP8]","[SIB+DISP32]","AH/SP/ESP"},
+        {"[DISP32]","[EBP+DISP8]","[EBP+DISP32]","CH/BP/EBP"},
+        {"[ESI]","[ESI+DISP8]","[ESI+DISP32]","DH/SI/ESI"},
+        {"[EDI]","[EDI+DISP8]","[EDI+DISP32]","BH/DI/EDI"}
+    }
+};
+
 
 file_t * assign_values(FILE * fileptr){
 
@@ -386,6 +409,31 @@ file_t * assign_values(FILE * fileptr){
     return file_info;
 }
 
+typedef struct {
+    char * initial;
+    char * dest;
+} mod_rm_registers ;
+
+mod_rm_registers *  fill_mod_rm(uint8_t modrm,instruction * ins,file_t * file){
+    uint8_t mod = (modrm >> 6) & 0x3;
+    uint8_t r = ( modrm >> 3) & 0b00000111;
+    uint8_t rm  = modrm & 0b00000111;
+
+    if (file->bits == 32){
+        mod_rm_registers * pre_modrm = malloc(sizeof(mod_rm_registers));
+        pre_modrm->initial = mod_rm[0][r][mod];
+        pre_modrm->dest = mod_rm[0][rm][mod];
+        return pre_modrm;
+    }
+    else if (file->bits == 64)
+    {
+        mod_rm_registers * pre_modrm = malloc(sizeof(mod_rm_registers));
+        pre_modrm->initial = mod_rm[1][r][mod];
+        pre_modrm->dest = mod_rm[1][rm][mod];
+        return pre_modrm;
+    }
+
+}
 
 size_t get_immediate_offset(cpu_instruction *cpu, file_t *file, instruction *ins) {
     size_t offset = cpu->pc + ins->opcode_len;
@@ -399,7 +447,7 @@ size_t get_immediate_offset(cpu_instruction *cpu, file_t *file, instruction *ins
     uint8_t mod = (modrm >> 6) & 0x3;
     uint8_t rm  = modrm & 0x7;
 
-
+    
     if (file->bits == 32 && mod != 3 && rm == 4) {
         offset++;  
     }
@@ -414,7 +462,6 @@ size_t get_immediate_offset(cpu_instruction *cpu, file_t *file, instruction *ins
 
     return offset;
 }
-
 
 
 void fill_instruction(instruction *ins, cpu_instruction *cpu, file_t *file) {
@@ -510,8 +557,23 @@ void get_opcode(cpu_instruction *cpu, file_t *file) {
         cpu->pc += 1;
         return;
     }
-
-    printf("%04zx: %02x   %s (bytes: %d)\n", cpu->pc, op, ins.mnemonic, ins.pc_increment);
+    // has modrm
+    if (ins.has_modrm && cpu->pc + 1 < file->file_size) {
+        uint8_t modrm = file->values[cpu->pc + ins.opcode_len];
+        mod_rm_registers *modrm_info = fill_mod_rm(modrm, &ins, file);
+        if (modrm_info) { // if null
+            printf("%04zx: %02x %02x %s (bytes: %d) [%s, %s]\n", 
+                   cpu->pc, op, modrm, ins.mnemonic, ins.pc_increment,
+                   modrm_info->dest, modrm_info->initial);
+            free(modrm_info);
+        } else {
+            printf("%04zx: %02x   %s (bytes: %d)\n", cpu->pc, op, ins.mnemonic, ins.pc_increment);
+        }
+    } else // no modrm
+    {
+        printf("%04zx: %02x   %s (bytes: %d)\n", cpu->pc, op, ins.mnemonic, ins.pc_increment);
+    }
+    
     cpu->pc += ins.pc_increment;
 }
 
@@ -521,7 +583,7 @@ uint64_t read64(uint8_t *data, int swap);
 
 void detect_elf_arch(file_t *file) {
     uint8_t elf_class = file->values[4];
-    uint8_t elf_data = file->values[5];  // EI_DATA: 1 = little, 2 = big
+    uint8_t elf_data = file->values[5];  // EI_DATA: 1 = little, 2 = big (endian)
     
     file->is_big_endian = (elf_data == 2) ? 1 : 0;
     
@@ -552,7 +614,6 @@ void detect_elf_arch(file_t *file) {
 void parse_elf_sections(file_t *file) {
     uint8_t *data = file->values;
     
-    // Determine if we need byte swapping
     int swap = 0;
     #if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
         swap = !file->is_big_endian;
@@ -567,7 +628,6 @@ void parse_elf_sections(file_t *file) {
         uint16_t shnum = read16(&data[0x30], swap);        // Number of section headers
         uint16_t shstrndx = read16(&data[0x32], swap);     // Section name string table index
         
-        // Validation: check if section headers are within file
         if (shoff == 0 || shoff >= file->file_size) {
             file->num_of_sections = 0;
             return;
@@ -581,7 +641,6 @@ void parse_elf_sections(file_t *file) {
         file->sections = calloc(shnum, sizeof(section_t));
         if (!file->sections) return;
         
-        // Get string table section offset
         if (shstrndx >= shnum) {
             free(file->sections);
             file->sections = NULL;
@@ -591,7 +650,6 @@ void parse_elf_sections(file_t *file) {
         
         uint32_t strtab_offset = read32(&data[shoff + shstrndx * shentsize + 0x10], swap);
         
-        // Validate string table offset
         if (strtab_offset >= file->file_size) {
             free(file->sections);
             file->sections = NULL;

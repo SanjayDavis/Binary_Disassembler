@@ -3,7 +3,6 @@
 #include <stdint.h>
 #include <string.h>
 
-// Cross-platform: only include unistd.h on non-Windows systems
 #ifndef _WIN32
 #include <unistd.h>
 #endif
@@ -129,6 +128,21 @@ enum ins_type {
     
     CBW, CWD, CDQ,
     
+    CMOVO, CMOVNO, CMOVB, CMOVAE, CMOVE, CMOVNE, CMOVBE, CMOVA,
+    CMOVS, CMOVNS, CMOVP, CMOVNP, CMOVL, CMOVGE, CMOVLE, CMOVG,
+    
+    SETO, SETNO, SETB, SETAE, SETE, SETNE, SETBE, SETA,
+    SETS, SETNS, SETP, SETNP, SETL, SETGE, SETLE, SETG,
+    
+    MOVZX, MOVSX, ENDBR64, CPUID, BSWAP,
+    BT, BTS, BTR, BTC, BSF, BSR,
+    SHLD, SHRD,
+    
+    IN, OUT, INSB, INSW, INSD, OUTSB, OUTSW, OUTSD,
+    PUSHA, POPA, BOUND, ARPL,
+    
+    MOVUPS, MOVAPS,
+    
     SEGMENT_OVERRIDE,
     
     INVALID
@@ -137,7 +151,7 @@ enum ins_type {
 
     
 
-const char * operand_type[] = {"rel8","rel16/32","imm8","imm16","moffs8","imm16/32","moffs16/32"};
+const char * operand_type[] = {"rel8","rel16/32","imm8","imm16","moffs8","imm16/32","moffs16/32","Sreg"};
 
 typedef struct {
     enum ins_type type;
@@ -174,9 +188,42 @@ instruction opcode_table[256] = {
     [0x5D] = {POP, "POP BP/EBP", 1, 1, 0},
     [0x5E] = {POP, "POP SI/ESI", 1, 1, 0},
     [0x5F] = {POP, "POP DI/EDI", 1, 1, 0},
+
+    
+    // More MOV variants
+    [0xA0] = {MOV, "MOV AL, moffs8", 5, 1, 0},
+    [0xA1] = {MOV, "MOV AX/EAX, moffs16/32", 5, 1, 0},
+    [0xA2] = {MOV, "MOV moffs8, AL", 5, 1, 0},
+    [0xA3] = {MOV, "MOV moffs16/32, AX/EAX", 5, 1, 0},
+    [0xB0] = {MOV, "MOV AL, imm8", 2, 1, 0},
+    [0xB1] = {MOV, "MOV CL, imm8", 2, 1, 0},
+    [0xB2] = {MOV, "MOV DL, imm8", 2, 1, 0},
+    [0xB3] = {MOV, "MOV BL, imm8", 2, 1, 0},
+    [0xB4] = {MOV, "MOV AH, imm8", 2, 1, 0},
+    [0xB5] = {MOV, "MOV CH, imm8", 2, 1, 0},
+    [0xB6] = {MOV, "MOV DH, imm8", 2, 1, 0},
+    [0xB7] = {MOV, "MOV BH, imm8", 2, 1, 0},
+    [0xB8] = {MOV, "MOV AX/EAX, imm16/32", 5, 1, 0},
+    [0xB9] = {MOV, "MOV CX/ECX, imm16/32", 5, 1, 0},
+    [0xBA] = {MOV, "MOV DX/EDX, imm16/32", 5, 1, 0},
+    [0xBB] = {MOV, "MOV BX/EBX, imm16/32", 5, 1, 0},
+    [0xBC] = {MOV, "MOV SP/ESP, imm16/32", 5, 1, 0},
+    [0xBD] = {MOV, "MOV BP/EBP, imm16/32", 5, 1, 0},
+    [0xBE] = {MOV, "MOV SI/ESI, imm16/32", 5, 1, 0},
+    [0xBF] = {MOV, "MOV DI/EDI, imm16/32", 5, 1, 0},
+    [0xC6] = {MOV, "MOV r/m8, imm8", 3, 1, 1},
+    [0xC7] = {MOV, "MOV r/m16/32, imm16/32", 6, 1, 1},
     
     [0x86] = {XCHG, "XCHG r/m8, r8", 2, 1, 1},
     [0x87] = {XCHG, "XCHG r/m16/32, r16/32", 2, 1, 1},
+    [0x88] = {MOV, "MOV r/m8, r8", 2, 1, 1},
+    [0x89] = {MOV, "MOV r/m16/32, r16/32", 2, 1, 1},
+    [0x8A] = {MOV, "MOV r8, r/m8", 2, 1, 1},
+    [0x8B] = {MOV, "MOV r16/32, r/m16/32", 2, 1, 1},
+    [0x8C] = {MOV, "MOV r/m16, Sreg", 2, 1, 1},
+    [0x8D] = {LEA, "LEA r16/32, m", 2, 1, 1},
+    [0x8E] = {MOV, "MOV Sreg, r/m16", 2, 1, 1},
+    [0x8F] = {POP, "POP r/m16/32", 2, 1, 1},
     [0x91] = {XCHG, "XCHG CX, AX", 1, 1, 0},
     [0x92] = {XCHG, "XCHG DX, AX", 1, 1, 0},
     [0x93] = {XCHG, "XCHG BX, AX", 1, 1, 0},
@@ -188,18 +235,74 @@ instruction opcode_table[256] = {
     [0xD7] = {XLAT, "XLAT", 1, 1, 0},
 
     // arithmetic inst
+    [0x00] = {ADD, "ADD r/m8, r8", 2, 1, 1},
+    [0x01] = {ADD, "ADD r/m16/32, r16/32", 2, 1, 1},
+    [0x02] = {ADD, "ADD r8, r/m8", 2, 1, 1},
+    [0x03] = {ADD, "ADD r16/32, r/m16/32", 2, 1, 1},
     [0x04] = {ADD, "ADD AL, imm8", 2, 1, 0},
     [0x05] = {ADD, "ADD AX/EAX, imm16/32", 3, 1, 0},
+    
+    [0x08] = {OR, "OR r/m8, r8", 2, 1, 1},
+    [0x09] = {OR, "OR r/m16/32, r16/32", 2, 1, 1},
+    [0x0A] = {OR, "OR r8, r/m8", 2, 1, 1},
+    [0x0B] = {OR, "OR r16/32, r/m16/32", 2, 1, 1},
+    [0x0C] = {OR, "OR AL, imm8", 2, 1, 0},
+    [0x0D] = {OR, "OR AX/EAX, imm16/32", 3, 1, 0},
+    
+    [0x10] = {ADC, "ADC r/m8, r8", 2, 1, 1},
+    [0x11] = {ADC, "ADC r/m16/32, r16/32", 2, 1, 1},
+    [0x12] = {ADC, "ADC r8, r/m8", 2, 1, 1},
+    [0x13] = {ADC, "ADC r16/32, r/m16/32", 2, 1, 1},
     [0x14] = {ADC, "ADC AL, imm8", 2, 1, 0},
     [0x15] = {ADC, "ADC AX/EAX, imm16/32", 3, 1, 0},
+    
+    [0x18] = {SBB, "SBB r/m8, r8", 2, 1, 1},
+    [0x19] = {SBB, "SBB r/m16/32, r16/32", 2, 1, 1},
+    [0x1A] = {SBB, "SBB r8, r/m8", 2, 1, 1},
+    [0x1B] = {SBB, "SBB r16/32, r/m16/32", 2, 1, 1},
+    [0x1C] = {SBB, "SBB AL, imm8", 2, 1, 0},
+    [0x1D] = {SBB, "SBB AX/EAX, imm16/32", 3, 1, 0},
+    
+    [0x20] = {AND, "AND r/m8, r8", 2, 1, 1},
+    [0x21] = {AND, "AND r/m16/32, r16/32", 2, 1, 1},
+    [0x22] = {AND, "AND r8, r/m8", 2, 1, 1},
+    [0x23] = {AND, "AND r16/32, r/m16/32", 2, 1, 1},
     [0x24] = {AND, "AND AL, imm8", 2, 1, 0},
     [0x25] = {AND, "AND AX/EAX, imm16/32", 3, 1, 0},
+    
+    [0x28] = {SUB, "SUB r/m8, r8", 2, 1, 1},
+    [0x29] = {SUB, "SUB r/m16/32, r16/32", 2, 1, 1},
+    [0x2A] = {SUB, "SUB r8, r/m8", 2, 1, 1},
+    [0x2B] = {SUB, "SUB r16/32, r/m16/32", 2, 1, 1},
     [0x2C] = {SUB, "SUB AL, imm8", 2, 1, 0},
     [0x2D] = {SUB, "SUB AX/EAX, imm16/32", 3, 1, 0},
+    
+    [0x30] = {XOR, "XOR r/m8, r8", 2, 1, 1},
+    [0x31] = {XOR, "XOR r/m16/32, r16/32", 2, 1, 1},
+    [0x32] = {XOR, "XOR r8, r/m8", 2, 1, 1},
+    [0x33] = {XOR, "XOR r16/32, r/m16/32", 2, 1, 1},
     [0x34] = {XOR, "XOR AL, imm8", 2, 1, 0},
     [0x35] = {XOR, "XOR AX/EAX, imm16/32", 3, 1, 0},
+    
+    [0x38] = {CMP, "CMP r/m8, r8", 2, 1, 1},
+    [0x39] = {CMP, "CMP r/m16/32, r16/32", 2, 1, 1},
+    [0x3A] = {CMP, "CMP r8, r/m8", 2, 1, 1},
+    [0x3B] = {CMP, "CMP r16/32, r/m16/32", 2, 1, 1},
     [0x3C] = {CMP, "CMP AL, imm8", 2, 1, 0},
     [0x3D] = {CMP, "CMP AX/EAX, imm16/32", 3, 1, 0},
+    
+    [0x80] = {INVALID, "Grp1 r/m8, imm8", 3, 1, 1},      // ADD/OR/ADC/SBB/AND/SUB/XOR/CMP
+    [0x81] = {INVALID, "Grp1 r/m16/32, imm16/32", 6, 1, 1},
+    [0x82] = {INVALID, "Grp1 r/m8, imm8", 3, 1, 1},
+    [0x83] = {INVALID, "Grp1 r/m16/32, imm8", 3, 1, 1},
+    [0x84] = {TEST, "TEST r/m8, r8", 2, 1, 1},
+    [0x85] = {TEST, "TEST r/m16/32, r16/32", 2, 1, 1},
+    [0xA8] = {TEST, "TEST AL, imm8", 2, 1, 0},
+    [0xA9] = {TEST, "TEST AX/EAX, imm16/32", 5, 1, 0},
+    [0xF6] = {INVALID, "Grp3 r/m8", 2, 1, 1},           // TEST/NOT/NEG/MUL/IMUL/DIV/IDIV
+    [0xF7] = {INVALID, "Grp3 r/m16/32", 2, 1, 1},
+    [0xFE] = {INVALID, "Grp4 r/m8", 2, 1, 1},           // INC/DEC
+    [0xFF] = {INVALID, "Grp5 r/m16/32", 2, 1, 1},       // INC/DEC/CALL/JMP/PUSH
     
     [0x1C] = {SBB, "SBB AL, imm8", 2, 1, 0},
     [0x1D] = {SBB, "SBB AX/EAX, imm16/32", 3, 1, 0},
@@ -304,14 +407,14 @@ instruction opcode_table[256] = {
     [0xF0] = {LOCK, "LOCK", 1, 1, 0},
 
     // io instructions
-    [0xE4] = {INVALID, "IN AL, imm8", 2, 1, 0},
-    [0xE5] = {INVALID, "IN AX/EAX, imm8", 2, 1, 0},
-    [0xE6] = {INVALID, "OUT imm8, AL", 2, 1, 0},
-    [0xE7] = {INVALID, "OUT imm8, AX/EAX", 2, 1, 0},
-    [0xEC] = {INVALID, "IN AL, DX", 1, 1, 0},
-    [0xED] = {INVALID, "IN AX/EAX, DX", 1, 1, 0},
-    [0xEE] = {INVALID, "OUT DX, AL", 1, 1, 0},
-    [0xEF] = {INVALID, "OUT DX, AX/EAX", 1, 1, 0},
+    [0xE4] = {IN, "IN AL, imm8", 2, 1, 0},
+    [0xE5] = {IN, "IN AX/EAX, imm8", 2, 1, 0},
+    [0xE6] = {OUT, "OUT imm8, AL", 2, 1, 0},
+    [0xE7] = {OUT, "OUT imm8, AX/EAX", 2, 1, 0},
+    [0xEC] = {IN, "IN AL, DX", 1, 1, 0},
+    [0xED] = {IN, "IN AX/EAX, DX", 1, 1, 0},
+    [0xEE] = {OUT, "OUT DX, AL", 1, 1, 0},
+    [0xEF] = {OUT, "OUT DX, AX/EAX", 1, 1, 0},
 
     // segment override
     [0x26] = {SEGMENT_OVERRIDE, "ES:", 1, 1, 0},
@@ -320,8 +423,55 @@ instruction opcode_table[256] = {
     [0x3E] = {SEGMENT_OVERRIDE, "DS:", 1, 1, 0},
     [0x64] = {SEGMENT_OVERRIDE, "FS:", 1, 1, 0},
     [0x65] = {SEGMENT_OVERRIDE, "GS:", 1, 1, 0},
+    
+    [0x06] = {PUSH, "PUSH ES", 1, 1, 0},
+    [0x07] = {POP, "POP ES", 1, 1, 0},
+    [0x0E] = {PUSH, "PUSH CS", 1, 1, 0},
+    [0x16] = {PUSH, "PUSH SS", 1, 1, 0},
+    [0x17] = {POP, "POP SS", 1, 1, 0},
+    [0x1E] = {PUSH, "PUSH DS", 1, 1, 0},
+    [0x1F] = {POP, "POP DS", 1, 1, 0},
+    
+    [0x60] = {PUSHA, "PUSHA/PUSHAD", 1, 1, 0},
+    [0x61] = {POPA, "POPA/POPAD", 1, 1, 0},
+    [0x62] = {BOUND, "BOUND r16/32, m16/32", 2, 1, 1},
+    [0x63] = {ARPL, "ARPL r/m16, r16", 2, 1, 1},
+    
+    [0x68] = {PUSH, "PUSH imm16/32", 5, 1, 0},
+    [0x69] = {IMUL, "IMUL r16/32, r/m16/32, imm16/32", 6, 1, 1},
+    [0x6A] = {PUSH, "PUSH imm8", 2, 1, 0},
+    [0x6B] = {IMUL, "IMUL r16/32, r/m16/32, imm8", 3, 1, 1},
+    [0x6C] = {INSB, "INSB", 1, 1, 0},
+    [0x6D] = {INSW, "INSW/INSD", 1, 1, 0},
+    [0x6E] = {OUTSB, "OUTSB", 1, 1, 0},
+    [0x6F] = {OUTSW, "OUTSW/OUTSD", 1, 1, 0},
+    
+    [0x9A] = {CALL, "CALL ptr16:16/32", 7, 1, 0},
+    
+    [0xC0] = {INVALID, "Grp2 r/m8, imm8", 3, 1, 1},
+    [0xC1] = {INVALID, "Grp2 r/m16/32, imm8", 3, 1, 1},
+    [0xC4] = {LES, "LES r16/32, m16:16/32", 2, 1, 1},
+    [0xC5] = {LDS, "LDS r16/32, m16:16/32", 2, 1, 1},
+    [0xC8] = {INVALID, "ENTER imm16, imm8", 4, 1, 0},
+    [0xC9] = {INVALID, "LEAVE", 1, 1, 0},
+    
+    [0xD0] = {INVALID, "Grp2 r/m8, 1", 2, 1, 1},
+    [0xD1] = {INVALID, "Grp2 r/m16/32, 1", 2, 1, 1},
+    [0xD2] = {INVALID, "Grp2 r/m8, CL", 2, 1, 1},
+    [0xD3] = {INVALID, "Grp2 r/m16/32, CL", 2, 1, 1},
+    [0xD6] = {INVALID, "SALC", 1, 1, 0},
+    [0xD8] = {INVALID, "ESC (FPU)", 2, 1, 1},
+    [0xD9] = {INVALID, "ESC (FPU)", 2, 1, 1},
+    [0xDA] = {INVALID, "ESC (FPU)", 2, 1, 1},
+    [0xDB] = {INVALID, "ESC (FPU)", 2, 1, 1},
+    [0xDC] = {INVALID, "ESC (FPU)", 2, 1, 1},
+    [0xDD] = {INVALID, "ESC (FPU)", 2, 1, 1},
+    [0xDE] = {INVALID, "ESC (FPU)", 2, 1, 1},
+    [0xDF] = {INVALID, "ESC (FPU)", 2, 1, 1},
+    
+    [0xF1] = {INVALID, "INT1/ICEBP", 1, 1, 0},
+    [0x0F] = {INVALID, "TWO-BYTE OPCODE", 1, 1, 0},
 
-    // repeat prefixes
     [0xF2] = {REPNE, "REPNE/REPNZ", 1, 1, 0},
     [0xF3] = {REP, "REP/REPE/REPZ", 1, 1, 0},
 
@@ -352,6 +502,102 @@ instruction opcode_table[256] = {
     // testing
     [0xA8] = {TEST, "TEST AL, imm8", 2, 1, 0},
     [0xA9] = {TEST, "TEST AX/EAX, imm16/32", 3, 1, 0},
+};
+
+instruction two_byte_opcode_table[256] = {
+    [0 ... 255] = {INVALID, NULL, 1, 1, 0},
+    
+    [0x1E] = {ENDBR64, "ENDBR64", 2, 1, 1},
+    [0x1F] = {NOP, "NOP r/m16/32", 2, 1, 1},
+    
+    [0x10] = {MOVUPS, "MOVUPS xmm, xmm/m128", 2, 1, 1},
+    [0x11] = {MOVUPS, "MOVUPS xmm/m128, xmm", 2, 1, 1},
+    [0x28] = {MOVAPS, "MOVAPS xmm, xmm/m128", 2, 1, 1},
+    [0x29] = {MOVAPS, "MOVAPS xmm/m128, xmm", 2, 1, 1},
+    
+    [0x40] = {CMOVO, "CMOVO r16/32, r/m16/32", 2, 1, 1},
+    [0x41] = {CMOVNO, "CMOVNO r16/32, r/m16/32", 2, 1, 1},
+    [0x42] = {CMOVB, "CMOVB r16/32, r/m16/32", 2, 1, 1},
+    [0x43] = {CMOVAE, "CMOVAE r16/32, r/m16/32", 2, 1, 1},
+    [0x44] = {CMOVE, "CMOVE r16/32, r/m16/32", 2, 1, 1},
+    [0x45] = {CMOVNE, "CMOVNE r16/32, r/m16/32", 2, 1, 1},
+    [0x46] = {CMOVBE, "CMOVBE r16/32, r/m16/32", 2, 1, 1},
+    [0x47] = {CMOVA, "CMOVA r16/32, r/m16/32", 2, 1, 1},
+    [0x48] = {CMOVS, "CMOVS r16/32, r/m16/32", 2, 1, 1},
+    [0x49] = {CMOVNS, "CMOVNS r16/32, r/m16/32", 2, 1, 1},
+    [0x4A] = {CMOVP, "CMOVP r16/32, r/m16/32", 2, 1, 1},
+    [0x4B] = {CMOVNP, "CMOVNP r16/32, r/m16/32", 2, 1, 1},
+    [0x4C] = {CMOVL, "CMOVL r16/32, r/m16/32", 2, 1, 1},
+    [0x4D] = {CMOVGE, "CMOVGE r16/32, r/m16/32", 2, 1, 1},
+    [0x4E] = {CMOVLE, "CMOVLE r16/32, r/m16/32", 2, 1, 1},
+    [0x4F] = {CMOVG, "CMOVG r16/32, r/m16/32", 2, 1, 1},
+    
+    [0x80] = {JO, "JO rel16/32", 5, 1, 0},
+    [0x81] = {JNO, "JNO rel16/32", 5, 1, 0},
+    [0x82] = {JB, "JB rel16/32", 5, 1, 0},
+    [0x83] = {JAE, "JAE rel16/32", 5, 1, 0},
+    [0x84] = {JE, "JE rel16/32", 5, 1, 0},
+    [0x85] = {JNE, "JNE rel16/32", 5, 1, 0},
+    [0x86] = {JBE, "JBE rel16/32", 5, 1, 0},
+    [0x87] = {JA, "JA rel16/32", 5, 1, 0},
+    [0x88] = {JS, "JS rel16/32", 5, 1, 0},
+    [0x89] = {JNS, "JNS rel16/32", 5, 1, 0},
+    [0x8A] = {JP, "JP rel16/32", 5, 1, 0},
+    [0x8B] = {JNP, "JNP rel16/32", 5, 1, 0},
+    [0x8C] = {JL, "JL rel16/32", 5, 1, 0},
+    [0x8D] = {JGE, "JGE rel16/32", 5, 1, 0},
+    [0x8E] = {JLE, "JLE rel16/32", 5, 1, 0},
+    [0x8F] = {JG, "JG rel16/32", 5, 1, 0},
+    
+    [0x90] = {SETO, "SETO r/m8", 2, 1, 1},
+    [0x91] = {SETNO, "SETNO r/m8", 2, 1, 1},
+    [0x92] = {SETB, "SETB r/m8", 2, 1, 1},
+    [0x93] = {SETAE, "SETAE r/m8", 2, 1, 1},
+    [0x94] = {SETE, "SETE r/m8", 2, 1, 1},
+    [0x95] = {SETNE, "SETNE r/m8", 2, 1, 1},
+    [0x96] = {SETBE, "SETBE r/m8", 2, 1, 1},
+    [0x97] = {SETA, "SETA r/m8", 2, 1, 1},
+    [0x98] = {SETS, "SETS r/m8", 2, 1, 1},
+    [0x99] = {SETNS, "SETNS r/m8", 2, 1, 1},
+    [0x9A] = {SETP, "SETP r/m8", 2, 1, 1},
+    [0x9B] = {SETNP, "SETNP r/m8", 2, 1, 1},
+    [0x9C] = {SETL, "SETL r/m8", 2, 1, 1},
+    [0x9D] = {SETGE, "SETGE r/m8", 2, 1, 1},
+    [0x9E] = {SETLE, "SETLE r/m8", 2, 1, 1},
+    [0x9F] = {SETG, "SETG r/m8", 2, 1, 1},
+    
+    [0xA0] = {PUSH, "PUSH FS", 1, 1, 0},
+    [0xA1] = {POP, "POP FS", 1, 1, 0},
+    [0xA2] = {CPUID, "CPUID", 1, 1, 0},
+    [0xA3] = {BT, "BT r/m16/32, r16/32", 2, 1, 1},
+    [0xA4] = {SHLD, "SHLD r/m16/32, r16/32, imm8", 3, 1, 1},
+    [0xA5] = {SHLD, "SHLD r/m16/32, r16/32, CL", 2, 1, 1},
+    [0xA8] = {PUSH, "PUSH GS", 1, 1, 0},
+    [0xA9] = {POP, "POP GS", 1, 1, 0},
+    [0xAB] = {BTS, "BTS r/m16/32, r16/32", 2, 1, 1},
+    [0xAC] = {SHRD, "SHRD r/m16/32, r16/32, imm8", 3, 1, 1},
+    [0xAD] = {SHRD, "SHRD r/m16/32, r16/32, CL", 2, 1, 1},
+    [0xAF] = {IMUL, "IMUL r16/32, r/m16/32", 2, 1, 1},
+    
+    [0xB0] = {XCHG, "CMPXCHG r/m8, r8", 2, 1, 1},
+    [0xB1] = {XCHG, "CMPXCHG r/m16/32, r16/32", 2, 1, 1},
+    [0xB6] = {MOVZX, "MOVZX r16/32, r/m8", 2, 1, 1},
+    [0xB7] = {MOVZX, "MOVZX r16/32, r/m16", 2, 1, 1},
+    [0xBA] = {BT, "Grp8 r/m16/32, imm8", 3, 1, 1},
+    [0xBE] = {MOVSX, "MOVSX r16/32, r/m8", 2, 1, 1},
+    [0xBF] = {MOVSX, "MOVSX r16/32, r/m16", 2, 1, 1},
+    
+    [0xC0] = {ADD, "XADD r/m8, r8", 2, 1, 1},
+    [0xC1] = {ADD, "XADD r/m16/32, r16/32", 2, 1, 1},
+    [0xC7] = {CMP, "CMPXCHG8B m64", 2, 1, 1},
+    [0xC8] = {BSWAP, "BSWAP EAX", 1, 1, 0},
+    [0xC9] = {BSWAP, "BSWAP ECX", 1, 1, 0},
+    [0xCA] = {BSWAP, "BSWAP EDX", 1, 1, 0},
+    [0xCB] = {BSWAP, "BSWAP EBX", 1, 1, 0},
+    [0xCC] = {BSWAP, "BSWAP ESP", 1, 1, 0},
+    [0xCD] = {BSWAP, "BSWAP EBP", 1, 1, 0},
+    [0xCE] = {BSWAP, "BSWAP ESI", 1, 1, 0},
+    [0xCF] = {BSWAP, "BSWAP EDI", 1, 1, 0},
 };
 
 char *mod_rm[2][8][4] = {
@@ -410,46 +656,56 @@ file_t * assign_values(FILE * fileptr){
 }
 
 typedef struct {
-    char reg_operand[64];   // The 'reg' field (middle 3 bits) - typically source/register
-    char rm_operand[64];    // The 'r/m' field (last 3 bits) - typically destination/register or memory
+    char reg_operand[64];   // reg field (middle 3 bits)
+    char rm_operand[64];    // r/m field (last 3 bits)
 } mod_rm_registers ;
 
 const char *reg_names_8bit[] = {"AL", "CL", "DL", "BL", "AH", "CH", "DH", "BH"};
+const char *reg_names_8bit_rex[] = {"AL", "CL", "DL", "BL", "SPL", "BPL", "SIL", "DIL", "R8B", "R9B", "R10B", "R11B", "R12B", "R13B", "R14B", "R15B"};
 const char *reg_names_16bit[] = {"AX", "CX", "DX", "BX", "SP", "BP", "SI", "DI"};
+const char *reg_names_16bit_ext[] = {"AX", "CX", "DX", "BX", "SP", "BP", "SI", "DI", "R8W", "R9W", "R10W", "R11W", "R12W", "R13W", "R14W", "R15W"};
 const char *reg_names_32bit[] = {"EAX", "ECX", "EDX", "EBX", "ESP", "EBP", "ESI", "EDI"};
+const char *reg_names_32bit_ext[] = {"EAX", "ECX", "EDX", "EBX", "ESP", "EBP", "ESI", "EDI", "R8D", "R9D", "R10D", "R11D", "R12D", "R13D", "R14D", "R15D"};
+const char *reg_names_64bit[] = {"RAX", "RCX", "RDX", "RBX", "RSP", "RBP", "RSI", "RDI", "R8", "R9", "R10", "R11", "R12", "R13", "R14", "R15"};
 
-char* decode_sib(uint8_t sib, uint8_t mod, file_t *file, size_t offset, char *output) {
+char* decode_sib(uint8_t sib, uint8_t mod, file_t *file, size_t offset, char *output, uint8_t rex) {
     uint8_t scale = (sib >> 6) & 0x3;
     uint8_t index = (sib >> 3) & 0x7;
     uint8_t base = sib & 0x7;
     
     const char *scale_str[] = {"", "*2", "*4", "*8"};
     
-    // Start building the SIB expression
+    int rex_b = (rex & 0x01) ? 8 : 0;
+    int rex_x = (rex & 0x02) ? 8 : 0;
+    int use_64bit = (rex & 0x08) != 0;
+    
+    const char **reg_names = use_64bit ? reg_names_64bit : reg_names_32bit_ext;
+    
+    int base_idx = base + rex_b;
+    int index_idx = index + rex_x;
+    
     output[0] = '\0';
     strcat(output, "[");
     
-    // Base register
     if (mod == 0 && base == 5) {
-        // Special case: disp32 with no base
         uint32_t disp = *(uint32_t*)&file->values[offset];
-        sprintf(output + strlen(output), "0x%x", disp);
+        if (index == 4 && (rex & 0x02) == 0) {
+            sprintf(output, "[0x%x", disp);
+        } else {
+            sprintf(output, "[%s%s+0x%x", reg_names[index_idx], scale_str[scale], disp);
+        }
     } else {
-        strcat(output, reg_names_32bit[base]);
-    }
-    
-    // Index register
-    if (index != 4) { // ESP cannot be an index
-        if (mod != 0 || base != 5) strcat(output, "+");
-        strcat(output, reg_names_32bit[index]);
-        strcat(output, scale_str[scale]);
+        sprintf(output, "[%s", reg_names[base_idx]);
+        if (index != 4 || (rex & 0x02) != 0) {
+            sprintf(output + strlen(output), "+%s%s", reg_names[index_idx], scale_str[scale]);
+        }
     }
     
     strcat(output, "]");
     return output;
 }
 
-mod_rm_registers *  fill_mod_rm(uint8_t modrm, cpu_instruction *cpu, file_t *file){
+mod_rm_registers *  fill_mod_rm(uint8_t modrm, cpu_instruction *cpu, file_t *file, uint8_t rex){
     uint8_t mod = (modrm >> 6) & 0x3;
     uint8_t reg = (modrm >> 3) & 0x7;
     uint8_t rm  = modrm & 0x7;
@@ -457,31 +713,35 @@ mod_rm_registers *  fill_mod_rm(uint8_t modrm, cpu_instruction *cpu, file_t *fil
     mod_rm_registers *result = malloc(sizeof(mod_rm_registers));
     if (!result) return NULL;
     
-    size_t offset = cpu->pc + 2; 
+    size_t offset = cpu->pc + 2;
     
-    if (file->bits == 64) {
-        strcpy(result->reg_operand, reg_names_32bit[reg]);
+    int rex_r = (rex & 0x04) ? 8 : 0;
+    int rex_b = (rex & 0x01) ? 8 : 0;
+    int use_64bit = (rex & 0x08) != 0;
+    
+    const char **reg_names;
+    if (use_64bit) {
+        reg_names = reg_names_64bit;
+    } else if (file->bits == 64) {
+        reg_names = reg_names_32bit_ext;
     } else {
-        strcpy(result->reg_operand, reg_names_16bit[reg]);
+        reg_names = reg_names_16bit;
     }
     
+    int reg_idx = reg + rex_r;
+    int rm_idx = rm + rex_b;
+    
+    strcpy(result->reg_operand, reg_names[reg_idx]);
+    
     if (mod == 3) {
-        // reg
-        if (file->bits == 64) {
-            strcpy(result->rm_operand, reg_names_32bit[rm]);
-        } else {
-            strcpy(result->rm_operand, reg_names_16bit[rm]);
-        }
+        strcpy(result->rm_operand, reg_names[rm_idx]);
     } else {
-        // mem mode
         if (file->bits == 64) {
-            // 32-bit addressing
             if (rm == 4) {
-                // sib byte follows
                 if (offset < file->file_size) {
                     uint8_t sib = file->values[offset];
                     offset++;
-                    decode_sib(sib, mod, file, offset, result->rm_operand);
+                    decode_sib(sib, mod, file, offset, result->rm_operand, rex);
                     
                     // add disp if needed
                     uint8_t base = sib & 0x7;
@@ -502,8 +762,7 @@ mod_rm_registers *  fill_mod_rm(uint8_t modrm, cpu_instruction *cpu, file_t *fil
                 uint32_t disp = *(uint32_t*)&file->values[offset];
                 sprintf(result->rm_operand, "[0x%x]", disp);
             } else {
-                // Reg + disp
-                sprintf(result->rm_operand, "[%s", reg_names_32bit[rm]);
+                sprintf(result->rm_operand, "[%s", reg_names[rm_idx]);
                 
                 if (mod == 1) {
                     int8_t disp = (int8_t)file->values[offset];
@@ -661,39 +920,210 @@ void fill_instruction(instruction *ins, cpu_instruction *cpu, file_t *file) {
     }
 }
 
+const char* get_group_instruction(uint8_t opcode, uint8_t modrm_reg) {
+    if (opcode >= 0x80 && opcode <= 0x83) {
+        const char *grp1[] = {"ADD", "OR", "ADC", "SBB", "AND", "SUB", "XOR", "CMP"};
+        return grp1[modrm_reg];
+    }
+    
+    if (opcode == 0xF6 || opcode == 0xF7) {
+        const char *grp3[] = {"TEST", "TEST", "NOT", "NEG", "MUL", "IMUL", "DIV", "IDIV"};
+        return grp3[modrm_reg];
+    }
+    
+    if (opcode == 0xFE) {
+        const char *grp4[] = {"INC", "DEC", "INVALID", "INVALID", "INVALID", "INVALID", "INVALID", "INVALID"};
+        return grp4[modrm_reg];
+    }
+    
+    if (opcode == 0xFF) {
+        const char *grp5[] = {"INC", "DEC", "CALL", "CALL", "JMP", "JMP", "PUSH", "INVALID"};
+        return grp5[modrm_reg];
+    }
+    
+    return NULL;
+}
+
 void get_opcode(cpu_instruction *cpu, file_t *file) {
+    size_t start_pc = cpu->pc;
+    uint8_t prefix_bytes[10];
+    int prefix_count = 0;
+    
+    uint8_t rex_prefix = 0;
+    if (file->bits == 64) {
+        uint8_t byte = file->values[cpu->pc];
+        if (byte >= 0x40 && byte <= 0x4F) {
+            rex_prefix = byte;
+            prefix_bytes[prefix_count++] = byte;
+            cpu->pc++;
+        }
+    }
+    
     uint8_t op = file->values[cpu->pc];
-    instruction ins = opcode_table[op];
+    instruction ins;
+    int is_two_byte = 0;
+    
+    if (op == 0x0F && cpu->pc + 1 < file->file_size) {
+        is_two_byte = 1;
+        prefix_bytes[prefix_count++] = op;
+        cpu->pc++;
+        op = file->values[cpu->pc];
+        ins = two_byte_opcode_table[op];
+    } else {
+        ins = opcode_table[op];
+    }
+    
     fill_instruction(&ins, cpu, file);
 
     
     if (ins.mnemonic == NULL) {
-        printf("%04zx: %02x      UNKNOWN\n", cpu->pc, op);
+        printf("%04zx: ", start_pc);
+        for (int i = 0; i < prefix_count; i++) {
+            printf("%02x ", prefix_bytes[i]);
+        }
+        printf("%02x      UNKNOWN\n", op);
         cpu->pc += 1;
         return;
     }
+    
     if (ins.has_modrm && cpu->pc + 1 < file->file_size) {
         uint8_t modrm = file->values[cpu->pc + ins.opcode_len];
-        mod_rm_registers *modrm_info = fill_mod_rm(modrm, cpu, file);
+        uint8_t modrm_reg = (modrm >> 3) & 0x7;  // Extract /digit field
+        
+        // Check if this is a group instruction
+        const char *group_mnemonic = get_group_instruction(op, modrm_reg);
+        
+        mod_rm_registers *modrm_info = fill_mod_rm(modrm, cpu, file, rex_prefix);
         if (modrm_info) {
             char inst_name[32];
-            const char *space = strchr(ins.mnemonic, ' ');
-            if (space) {
-                size_t len = space - ins.mnemonic;
-                strncpy(inst_name, ins.mnemonic, len);
-                inst_name[len] = '\0';
+            
+            // Use group mnemonic if this is a group instruction
+            if (group_mnemonic != NULL) {
+                strcpy(inst_name, group_mnemonic);
             } else {
-                strcpy(inst_name, ins.mnemonic);
+                const char *space = strchr(ins.mnemonic, ' ');
+                if (space) {
+                    size_t len = space - ins.mnemonic;
+                    strncpy(inst_name, ins.mnemonic, len);
+                    inst_name[len] = '\0';
+                } else {
+                    strcpy(inst_name, ins.mnemonic);
+                }
             }
-            printf("%04zx: %02x %02x %-8s %s, %s\n", 
-                   cpu->pc, op, modrm, inst_name,
-                   modrm_info->rm_operand, modrm_info->reg_operand);
+            
+            printf("%04zx: ", start_pc);
+            for (int i = 0; i < prefix_count; i++) {
+                printf("%02x ", prefix_bytes[i]);
+            }
+            
+            // For group instructions, format output differently based on the instruction
+            if (group_mnemonic != NULL) {
+                // Group 1 (0x80-0x83): instruction r/m, imm
+                if (op >= 0x80 && op <= 0x83) {
+                    // Get immediate value
+                    size_t imm_offset = cpu->pc + ins.opcode_len;
+                    uint8_t mod = (modrm >> 6) & 0x3;
+                    uint8_t rm = modrm & 0x7;
+                    
+                    // Calculate where immediate starts (after ModR/M and SIB/displacement)
+                    imm_offset++;  // Skip ModR/M
+                    if (file->bits >= 32 && mod != 3 && rm == 4) imm_offset++;  // Skip SIB
+                    if (mod == 1) imm_offset += 1;  // disp8
+                    else if (mod == 2) imm_offset += 4;  // disp32
+                    else if (mod == 0 && rm == 5) imm_offset += 4;  // disp32 only
+                    
+                    if (op == 0x80 || op == 0x82) {
+                        // 8-bit immediate
+                        uint8_t imm = file->values[imm_offset];
+                        printf("%02x %02x %s %s, 0x%02x\n", op, modrm, inst_name, modrm_info->rm_operand, imm);
+                    } else if (op == 0x83) {
+                        // sign-extended 8-bit immediate
+                        int8_t imm = (int8_t)file->values[imm_offset];
+                        printf("%02x %02x %s %s, 0x%02x\n", op, modrm, inst_name, modrm_info->rm_operand, (uint8_t)imm);
+                    } else {
+                        // 0x81: 16/32-bit immediate
+                        if (file->bits == 64 || file->bits == 32) {
+                            uint32_t imm = *(uint32_t*)&file->values[imm_offset];
+                            printf("%02x %02x %s %s, 0x%08x\n", op, modrm, inst_name, modrm_info->rm_operand, imm);
+                        } else {
+                            uint16_t imm = *(uint16_t*)&file->values[imm_offset];
+                            printf("%02x %02x %s %s, 0x%04x\n", op, modrm, inst_name, modrm_info->rm_operand, imm);
+                        }
+                    }
+                }
+                // Group 3 (0xF6-0xF7): TEST has immediate, others are unary
+                else if (op == 0xF6 || op == 0xF7) {
+                    if (modrm_reg == 0 || modrm_reg == 1) {
+                        // TEST instruction has immediate
+                        size_t imm_offset = cpu->pc + ins.opcode_len;
+                        uint8_t mod = (modrm >> 6) & 0x3;
+                        uint8_t rm = modrm & 0x7;
+                        
+                        imm_offset++;
+                        if (file->bits >= 32 && mod != 3 && rm == 4) imm_offset++;
+                        if (mod == 1) imm_offset += 1;
+                        else if (mod == 2) imm_offset += 4;
+                        else if (mod == 0 && rm == 5) imm_offset += 4;
+                        
+                        if (op == 0xF6) {
+                            uint8_t imm = file->values[imm_offset];
+                            printf("%02x %02x %s %s, 0x%02x\n", op, modrm, inst_name, modrm_info->rm_operand, imm);
+                        } else {
+                            if (file->bits == 64 || file->bits == 32) {
+                                uint32_t imm = *(uint32_t*)&file->values[imm_offset];
+                                printf("%02x %02x %s %s, 0x%08x\n", op, modrm, inst_name, modrm_info->rm_operand, imm);
+                            } else {
+                                uint16_t imm = *(uint16_t*)&file->values[imm_offset];
+                                printf("%02x %02x %s %s, 0x%04x\n", op, modrm, inst_name, modrm_info->rm_operand, imm);
+                            }
+                        }
+                    } else {
+                        // NOT/NEG/MUL/IMUL/DIV/IDIV - unary operations
+                        printf("%02x %02x %s %s\n", op, modrm, inst_name, modrm_info->rm_operand);
+                    }
+                }
+                // Group 4 (0xFE) and Group 5 (0xFF): unary operations
+                else {
+                    printf("%02x %02x %s %s\n", op, modrm, inst_name, modrm_info->rm_operand);
+                }
+            } else {
+                const char *first_op, *second_op;
+                
+                // Determine operand order from mnemonic
+                // If mnemonic contains "r/m" before "r16/32" or "r8", then it's rm, reg
+                // Otherwise it's reg, rm
+                const char *mnem = ins.mnemonic;
+                const char *rm_pos = strstr(mnem, "r/m");
+                const char *r_pos = strstr(mnem, ", r");
+                
+                if (rm_pos && r_pos && rm_pos < r_pos) {
+                    // r/m comes first, so: destination=rm, source=reg
+                    first_op = modrm_info->rm_operand;
+                    second_op = modrm_info->reg_operand;
+                } else {
+                    // r comes first (or default), so: destination=reg, source=rm
+                    first_op = modrm_info->reg_operand;
+                    second_op = modrm_info->rm_operand;
+                }
+                
+                printf("%02x %02x %s %s, %s\n", 
+                       op, modrm, inst_name,
+                       first_op, second_op);
+            }
             free(modrm_info);
         } else {
-            printf("%04zx: %02x    %-20s\n", cpu->pc, op, ins.mnemonic);
+            printf("%04zx: ", start_pc);
+            for (int i = 0; i < prefix_count; i++) {
+                printf("%02x ", prefix_bytes[i]);
+            }
+            printf("%02x    %-20s\n", op, ins.mnemonic);
         }
     } else {
-        printf("%04zx: %02x    %-20s\n", cpu->pc, op, ins.mnemonic);
+        printf("%04zx: ", start_pc);
+        for (int i = 0; i < prefix_count; i++) {
+            printf("%02x ", prefix_bytes[i]);
+        }
+        printf("%02x    %-20s\n", op, ins.mnemonic);
     }
     
     cpu->pc += ins.pc_increment;
@@ -1423,14 +1853,24 @@ int main(int argc, char ** argv){
     display_sections(file);
     display_functions(file);
 
-    
-
-    cpu_instruction cpu = {0};
-    while (cpu.pc < file->file_size) {
-        get_opcode(&cpu, file);
+    printf("\n==== DISASSEMBLY ====\n");
+    for (int i = 0; i < file->num_of_sections; i++) {
+        section_t *sec = &file->sections[i];
+        
+        if (sec->flags & SEC_EXEC) {
+            printf("\nSection: %s\n", sec->name);
+            
+            cpu_instruction cpu = {0};
+            cpu.pc = sec->raw_offset;
+            size_t section_end = sec->raw_offset + sec->raw_size;
+            
+            while (cpu.pc < section_end && cpu.pc < file->file_size) {
+                get_opcode(&cpu, file);
+            }
+        }
     }
 
-    // Cleanup
+
     if (file->sections) {
         for (int i = 0; i < file->num_of_sections; i++) {
             if (file->sections[i].data) {

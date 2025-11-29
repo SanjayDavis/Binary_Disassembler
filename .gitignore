@@ -3,6 +3,7 @@
 *.out
 reverse
 reverse.exe
+*.txt
 
 # Object files
 *.o
@@ -28,3 +29,4 @@ desktop.ini
 build/
 bin/
 obj/
+test/

@@ -365,8 +365,8 @@ instruction opcode_table[256] = {
     [0x7F] = {JG, "JG/JNLE rel8", 2, 1, 0},
 
     // normal jumps
-    [0xE8] = {CALL, "CALL rel16/32", 3, 1, 0},
-    [0xE9] = {JMP, "JMP rel16/32", 3, 1, 0},
+    [0xE8] = {CALL, "CALL rel16/32", 5, 1, 0},
+    [0xE9] = {JMP, "JMP rel16/32", 5, 1, 0},
     [0xEA] = {JMP, "JMP ptr16:16/32", 5, 1, 0},
     [0xEB] = {JMP, "JMP rel8", 2, 1, 0},
     
@@ -507,7 +507,7 @@ instruction opcode_table[256] = {
 instruction two_byte_opcode_table[256] = {
     [0 ... 255] = {INVALID, NULL, 1, 1, 0},
     
-    [0x1E] = {ENDBR64, "ENDBR64", 2, 1, 1},
+    [0x1E] = {ENDBR64, "ENDBR64", 2, 1, 0},
     [0x1F] = {NOP, "NOP r/m16/32", 2, 1, 1},
     
     [0x10] = {MOVUPS, "MOVUPS xmm, xmm/m128", 2, 1, 1},
@@ -758,9 +758,8 @@ mod_rm_registers *  fill_mod_rm(uint8_t modrm, cpu_instruction *cpu, file_t *fil
                     }
                 }
             } else if (mod == 0 && rm == 5) {
-                // disp32 only
-                uint32_t disp = *(uint32_t*)&file->values[offset];
-                sprintf(result->rm_operand, "[0x%x]", disp);
+                int32_t disp = *(int32_t*)&file->values[offset];
+                sprintf(result->rm_operand, "[RIP+0x%x]", (uint32_t)disp);
             } else {
                 sprintf(result->rm_operand, "[%s", reg_names[rm_idx]);
                 
@@ -821,18 +820,16 @@ size_t get_immediate_offset(cpu_instruction *cpu, file_t *file, instruction *ins
     uint8_t mod = (modrm >> 6) & 0x3;
     uint8_t rm  = modrm & 0x7;
 
-    
-    if (file->bits == 32 && mod != 3 && rm == 4) {
-        offset++;  
+    if ((file->bits == 32 || file->bits == 64) && mod != 3 && rm == 4) {
+        offset++;
     }
 
-
     if (mod == 1)
-        offset += 1;      
+        offset += 1;
     else if (mod == 2)
-        offset += 4;       
+        offset += 4;
     else if (mod == 0 && rm == 5)
-        offset += 4;       
+        offset += 4;
 
     return offset;
 }
@@ -852,38 +849,32 @@ void fill_instruction(instruction *ins, cpu_instruction *cpu, file_t *file) {
             size_t offset = get_immediate_offset(cpu, file, ins); 
             
             if (strcmp(operand_type[i], "rel8") == 0) {
-
                 int8_t rel = (int8_t)file->values[offset];
                 sprintf(value_str, "0x%04zx", cpu->pc + ins->pc_increment + rel);
             }
             else if (strcmp(operand_type[i], "rel16/32") == 0) {
-
-                if (file->bits == 32) {
+                if (file->bits == 64 || file->bits == 32) {
                     int32_t rel = *(int32_t*)&file->values[offset];
-                    sprintf(value_str, "0x%08zx", cpu->pc + ins->pc_increment + rel);
+                    sprintf(value_str, "0x%04zx", cpu->pc + ins->pc_increment + rel);
                 } else {
                     int16_t rel = *(int16_t*)&file->values[offset];
                     sprintf(value_str, "0x%04zx", cpu->pc + ins->pc_increment + rel);
                 }
             }
             else if (strcmp(operand_type[i], "imm8") == 0) {
-
                 uint8_t imm = file->values[offset];
                 sprintf(value_str, "0x%02x", imm);
             }
             else if (strcmp(operand_type[i], "imm16") == 0) {
-
                 uint16_t imm = *(uint16_t*)&file->values[offset];
                 sprintf(value_str, "0x%04x", imm);
             }
             else if (strcmp(operand_type[i], "moffs8") == 0) {
-
                 uint8_t moffs = file->values[offset];
                 sprintf(value_str, "[0x%02x]", moffs);
             }
             else if (strcmp(operand_type[i], "imm16/32") == 0) {
-
-                if (file->bits == 32) {
+                if (file->bits == 64 || file->bits == 32) {
                     uint32_t imm = *(uint32_t*)&file->values[offset];
                     sprintf(value_str, "0x%08x", imm);
                 } else {
@@ -892,8 +883,7 @@ void fill_instruction(instruction *ins, cpu_instruction *cpu, file_t *file) {
                 }
             }
             else if (strcmp(operand_type[i], "moffs16/32") == 0) {
-
-                if (file->bits == 32) {
+                if (file->bits == 64 || file->bits == 32) {
                     uint32_t moffs = *(uint32_t*)&file->values[offset];
                     sprintf(value_str, "[0x%08x]", moffs);
                 } else {
@@ -926,6 +916,16 @@ const char* get_group_instruction(uint8_t opcode, uint8_t modrm_reg) {
         return grp1[modrm_reg];
     }
     
+    if (opcode >= 0xC0 && opcode <= 0xC1) {
+        const char *grp2[] = {"ROL", "ROR", "RCL", "RCR", "SHL", "SHR", "SAL", "SAR"};
+        return grp2[modrm_reg];
+    }
+    
+    if (opcode >= 0xD0 && opcode <= 0xD3) {
+        const char *grp2[] = {"ROL", "ROR", "RCL", "RCR", "SHL", "SHR", "SAL", "SAR"};
+        return grp2[modrm_reg];
+    }
+    
     if (opcode == 0xF6 || opcode == 0xF7) {
         const char *grp3[] = {"TEST", "TEST", "NOT", "NEG", "MUL", "IMUL", "DIV", "IDIV"};
         return grp3[modrm_reg];
@@ -944,10 +944,99 @@ const char* get_group_instruction(uint8_t opcode, uint8_t modrm_reg) {
     return NULL;
 }
 
+size_t calculate_instruction_length(cpu_instruction *cpu, file_t *file, instruction *ins, size_t start_pc, uint8_t op) {
+    size_t prefix_len = cpu->pc - start_pc;
+    size_t length = prefix_len + ins->opcode_len;
+    
+    if (ins->has_modrm) {
+        size_t modrm_pos = cpu->pc + ins->opcode_len;
+        if (modrm_pos >= file->file_size) return length;
+        
+        uint8_t modrm = file->values[modrm_pos];
+        uint8_t mod = (modrm >> 6) & 0x3;
+        uint8_t rm = modrm & 0x7;
+        uint8_t modrm_reg = (modrm >> 3) & 0x7;
+        
+        length += 1;
+        
+        if (mod != 3 && rm == 4 && (file->bits == 32 || file->bits == 64)) {
+            length += 1;
+        }
+        
+        if (mod == 1) {
+            length += 1;
+        } else if (mod == 2) {
+            length += 4;
+        } else if (mod == 0 && rm == 5) {
+            length += 4;
+        }
+        
+        if (op >= 0x80 && op <= 0x81) {
+            length += (op == 0x80) ? 1 : ((file->bits == 64 || file->bits == 32) ? 4 : 2);
+        } else if (op == 0x82 || op == 0x83) {
+            length += 1;
+        } else if (op >= 0xC0 && op <= 0xC1) {
+            length += 1;
+        } else if (op == 0xC6) {
+            length += 1;
+        } else if (op == 0xC7) {
+            length += (file->bits == 64 || file->bits == 32) ? 4 : 2;
+        } else if (op >= 0xD0 && op <= 0xD3) {
+            if (op == 0xD0 || op == 0xD2) {
+                length += 0;
+            } else {
+                length += 0;
+            }
+        } else if (op == 0xF6 || op == 0xF7) {
+            if (modrm_reg == 0 || modrm_reg == 1) {
+                length += (op == 0xF6) ? 1 : ((file->bits == 64 || file->bits == 32) ? 4 : 2);
+            }
+        }
+    } else {
+        length += ins->pc_increment - ins->opcode_len;
+    }
+    
+    return length;
+}
+
 void get_opcode(cpu_instruction *cpu, file_t *file) {
     size_t start_pc = cpu->pc;
     uint8_t prefix_bytes[10];
     int prefix_count = 0;
+    
+    uint8_t legacy_prefix = 0;
+    uint8_t operand_size_override = 0;
+    uint8_t address_size_override = 0;
+    uint8_t segment_override = 0;
+    
+    while (cpu->pc < file->file_size) {
+        uint8_t byte = file->values[cpu->pc];
+        int is_prefix = 0;
+        
+        if (byte == 0xF2 || byte == 0xF3) {
+            legacy_prefix = byte;
+            prefix_bytes[prefix_count++] = byte;
+            cpu->pc++;
+            is_prefix = 1;
+        } else if (byte == 0x66) {
+            operand_size_override = 1;
+            prefix_bytes[prefix_count++] = byte;
+            cpu->pc++;
+            is_prefix = 1;
+        } else if (byte == 0x67) {
+            address_size_override = 1;
+            prefix_bytes[prefix_count++] = byte;
+            cpu->pc++;
+            is_prefix = 1;
+        } else if (byte == 0x26 || byte == 0x2E || byte == 0x36 || byte == 0x3E || byte == 0x64 || byte == 0x65) {
+            segment_override = byte;
+            prefix_bytes[prefix_count++] = byte;
+            cpu->pc++;
+            is_prefix = 1;
+        }
+        
+        if (!is_prefix) break;
+    }
     
     uint8_t rex_prefix = 0;
     if (file->bits == 64) {
@@ -1012,11 +1101,14 @@ void get_opcode(cpu_instruction *cpu, file_t *file) {
             }
             
             printf("%04zx: ", start_pc);
-            for (int i = 0; i < prefix_count; i++) {
-                printf("%02x ", prefix_bytes[i]);
+            size_t instr_len = calculate_instruction_length(cpu, file, &ins, start_pc, op);
+            for (size_t i = 0; i < instr_len && i < 15; i++) {
+                printf("%02x ", file->values[start_pc + i]);
+            }
+            for (size_t i = instr_len; i < 3; i++) {
+                printf("   ");
             }
             
-            // For group instructions, format output differently based on the instruction
             if (group_mnemonic != NULL) {
                 // Group 1 (0x80-0x83): instruction r/m, imm
                 if (op >= 0x80 && op <= 0x83) {
@@ -1033,21 +1125,18 @@ void get_opcode(cpu_instruction *cpu, file_t *file) {
                     else if (mod == 0 && rm == 5) imm_offset += 4;  // disp32 only
                     
                     if (op == 0x80 || op == 0x82) {
-                        // 8-bit immediate
                         uint8_t imm = file->values[imm_offset];
-                        printf("%02x %02x %s %s, 0x%02x\n", op, modrm, inst_name, modrm_info->rm_operand, imm);
+                        printf("%s %s, 0x%02x\n", inst_name, modrm_info->rm_operand, imm);
                     } else if (op == 0x83) {
-                        // sign-extended 8-bit immediate
                         int8_t imm = (int8_t)file->values[imm_offset];
-                        printf("%02x %02x %s %s, 0x%02x\n", op, modrm, inst_name, modrm_info->rm_operand, (uint8_t)imm);
+                        printf("%s %s, 0x%02x\n", inst_name, modrm_info->rm_operand, (uint8_t)imm);
                     } else {
-                        // 0x81: 16/32-bit immediate
                         if (file->bits == 64 || file->bits == 32) {
                             uint32_t imm = *(uint32_t*)&file->values[imm_offset];
-                            printf("%02x %02x %s %s, 0x%08x\n", op, modrm, inst_name, modrm_info->rm_operand, imm);
+                            printf("%s %s, 0x%08x\n", inst_name, modrm_info->rm_operand, imm);
                         } else {
                             uint16_t imm = *(uint16_t*)&file->values[imm_offset];
-                            printf("%02x %02x %s %s, 0x%04x\n", op, modrm, inst_name, modrm_info->rm_operand, imm);
+                            printf("%s %s, 0x%04x\n", inst_name, modrm_info->rm_operand, imm);
                         }
                     }
                 }
@@ -1067,66 +1156,165 @@ void get_opcode(cpu_instruction *cpu, file_t *file) {
                         
                         if (op == 0xF6) {
                             uint8_t imm = file->values[imm_offset];
-                            printf("%02x %02x %s %s, 0x%02x\n", op, modrm, inst_name, modrm_info->rm_operand, imm);
+                            printf("%s %s, 0x%02x\n", inst_name, modrm_info->rm_operand, imm);
                         } else {
                             if (file->bits == 64 || file->bits == 32) {
                                 uint32_t imm = *(uint32_t*)&file->values[imm_offset];
-                                printf("%02x %02x %s %s, 0x%08x\n", op, modrm, inst_name, modrm_info->rm_operand, imm);
+                                printf("%s %s, 0x%08x\n", inst_name, modrm_info->rm_operand, imm);
                             } else {
                                 uint16_t imm = *(uint16_t*)&file->values[imm_offset];
-                                printf("%02x %02x %s %s, 0x%04x\n", op, modrm, inst_name, modrm_info->rm_operand, imm);
+                                printf("%s %s, 0x%04x\n", inst_name, modrm_info->rm_operand, imm);
                             }
                         }
                     } else {
-                        // NOT/NEG/MUL/IMUL/DIV/IDIV - unary operations
-                        printf("%02x %02x %s %s\n", op, modrm, inst_name, modrm_info->rm_operand);
+                        printf("%s %s\n", inst_name, modrm_info->rm_operand);
                     }
                 }
-                // Group 4 (0xFE) and Group 5 (0xFF): unary operations
+                else if (op >= 0xC0 && op <= 0xC1) {
+                    size_t imm_offset = cpu->pc + ins.opcode_len;
+                    uint8_t mod = (modrm >> 6) & 0x3;
+                    uint8_t rm = modrm & 0x7;
+                    
+                    imm_offset++;
+                    if (file->bits >= 32 && mod != 3 && rm == 4) imm_offset++;
+                    if (mod == 1) imm_offset += 1;
+                    else if (mod == 2) imm_offset += 4;
+                    else if (mod == 0 && rm == 5) imm_offset += 4;
+                    
+                    uint8_t imm = file->values[imm_offset];
+                    printf("%s %s, 0x%02x\n", inst_name, modrm_info->rm_operand, imm);
+                }
+                else if (op >= 0xD0 && op <= 0xD1) {
+                    printf("%s %s, 1\n", inst_name, modrm_info->rm_operand);
+                }
+                else if (op >= 0xD2 && op <= 0xD3) {
+                    printf("%s %s, CL\n", inst_name, modrm_info->rm_operand);
+                }
                 else {
-                    printf("%02x %02x %s %s\n", op, modrm, inst_name, modrm_info->rm_operand);
+                    char operand[64];
+                    strcpy(operand, modrm_info->rm_operand);
+                    if (file->bits == 64) {
+                        uint8_t mod = (modrm >> 6) & 0x3;
+                        if (mod == 3) {
+                            const char *reg_map[][2] = {
+                                {"EAX", "RAX"}, {"ECX", "RCX"}, {"EDX", "RDX"}, {"EBX", "RBX"},
+                                {"ESP", "RSP"}, {"EBP", "RBP"}, {"ESI", "RSI"}, {"EDI", "RDI"}
+                            };
+                            for (int i = 0; i < 8; i++) {
+                                if (strcmp(operand, reg_map[i][0]) == 0) {
+                                    strcpy(operand, reg_map[i][1]);
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    printf("%s %s\n", inst_name, operand);
                 }
             } else {
                 const char *first_op, *second_op;
-                
-                // Determine operand order from mnemonic
-                // If mnemonic contains "r/m" before "r16/32" or "r8", then it's rm, reg
-                // Otherwise it's reg, rm
                 const char *mnem = ins.mnemonic;
                 const char *rm_pos = strstr(mnem, "r/m");
                 const char *r_pos = strstr(mnem, ", r");
                 
                 if (rm_pos && r_pos && rm_pos < r_pos) {
-                    // r/m comes first, so: destination=rm, source=reg
                     first_op = modrm_info->rm_operand;
                     second_op = modrm_info->reg_operand;
                 } else {
-                    // r comes first (or default), so: destination=reg, source=rm
                     first_op = modrm_info->reg_operand;
                     second_op = modrm_info->rm_operand;
                 }
                 
-                printf("%02x %02x %s %s, %s\n", 
-                       op, modrm, inst_name,
-                       first_op, second_op);
+                if (ins.type == ENDBR64) {
+                    printf("%s\n", inst_name);
+                } else if (op == 0xC6 || op == 0xC7) {
+                    size_t imm_offset = cpu->pc + ins.opcode_len;
+                    uint8_t mod = (modrm >> 6) & 0x3;
+                    uint8_t rm = modrm & 0x7;
+                    imm_offset++;
+                    if (file->bits >= 32 && mod != 3 && rm == 4) imm_offset++;
+                    if (mod == 1) imm_offset += 1;
+                    else if (mod == 2) imm_offset += 4;
+                    else if (mod == 0 && rm == 5) imm_offset += 4;
+                    
+                    if (op == 0xC6) {
+                        uint8_t imm = file->values[imm_offset];
+                        printf("%s BYTE PTR %s, 0x%02x\n", inst_name, modrm_info->rm_operand, imm);
+                    } else {
+                        if (file->bits == 64 || file->bits == 32) {
+                            uint32_t imm = *(uint32_t*)&file->values[imm_offset];
+                            printf("%s DWORD PTR %s, 0x%x\n", inst_name, modrm_info->rm_operand, imm);
+                        } else {
+                            uint16_t imm = *(uint16_t*)&file->values[imm_offset];
+                            printf("%s WORD PTR %s, 0x%x\n", inst_name, modrm_info->rm_operand, imm);
+                        }
+                    }
+                } else {
+                    printf("%s %s, %s\n", inst_name, first_op, second_op);
+                }
             }
             free(modrm_info);
         } else {
             printf("%04zx: ", start_pc);
-            for (int i = 0; i < prefix_count; i++) {
-                printf("%02x ", prefix_bytes[i]);
+            size_t instr_len = calculate_instruction_length(cpu, file, &ins, start_pc, op);
+            for (size_t i = 0; i < instr_len && i < 15; i++) {
+                printf("%02x ", file->values[start_pc + i]);
             }
-            printf("%02x    %-20s\n", op, ins.mnemonic);
+            for (size_t i = instr_len; i < 3; i++) {
+                printf("   ");
+            }
+            printf("%-20s\n", ins.mnemonic);
         }
     } else {
         printf("%04zx: ", start_pc);
-        for (int i = 0; i < prefix_count; i++) {
-            printf("%02x ", prefix_bytes[i]);
+        size_t instr_len = calculate_instruction_length(cpu, file, &ins, start_pc, op);
+        for (size_t i = 0; i < instr_len && i < 15; i++) {
+            printf("%02x ", file->values[start_pc + i]);
         }
-        printf("%02x    %-20s\n", op, ins.mnemonic);
+        for (size_t i = instr_len; i < 3; i++) {
+            printf("   ");
+        }
+        
+        char display_mnemonic[256];
+        strcpy(display_mnemonic, ins.mnemonic);
+        
+        if (file->bits == 64 && (op >= 0x50 && op <= 0x5F)) {
+            const char *reg_map[][3] = {
+                {"AX/EAX", "RAX"}, {"CX/ECX", "RCX"}, {"DX/EDX", "RDX"}, {"BX/EBX", "RBX"},
+                {"SP/ESP", "RSP"}, {"BP/EBP", "RBP"}, {"SI/ESI", "RSI"}, {"DI/EDI", "RDI"}
+            };
+            
+            for (int i = 0; i < 8; i++) {
+                char *pos = strstr(display_mnemonic, reg_map[i][0]);
+                if (pos) {
+                    size_t prefix_len = pos - display_mnemonic;
+                    char temp[256];
+                    strncpy(temp, display_mnemonic, prefix_len);
+                    temp[prefix_len] = '\0';
+                    strcat(temp, reg_map[i][1]);
+                    strcat(temp, pos + strlen(reg_map[i][0]));
+                    strcpy(display_mnemonic, temp);
+                    break;
+                }
+            }
+        }
+        
+        if ((op == 0xFF || op == 0xFE) && ins.has_modrm && cpu->pc + 1 < file->file_size) {
+            uint8_t modrm = file->values[cpu->pc + ins.opcode_len];
+            uint8_t mod = (modrm >> 6) & 0x3;
+            if (mod == 3 && file->bits == 64) {
+                char *eax_pos = strstr(display_mnemonic, "EAX");
+                if (eax_pos) {
+                    strcpy(eax_pos, "RAX");
+                    strcpy(eax_pos + 3, eax_pos + 3);
+                }
+            }
+        }
+        
+        printf("%-20s\n", display_mnemonic);
     }
     
-    cpu->pc += ins.pc_increment;
+    size_t actual_length = calculate_instruction_length(cpu, file, &ins, start_pc, op);
+    cpu->pc = start_pc + actual_length;
 }
 
 uint16_t read16(uint8_t *data, int swap);

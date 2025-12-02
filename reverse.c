@@ -24,13 +24,12 @@ enum file_type {
     UNKNOWN
 };
 
-// Section flags (cross-platform)
 #define SEC_ALLOC   0x1
 #define SEC_EXEC    0x2
 #define SEC_WRITE   0x4
 #define SEC_READ    0x8
 
-// ELF section types
+// elf section types
 #define SHT_NULL     0
 #define SHT_PROGBITS 1
 #define SHT_SYMTAB   2
@@ -43,7 +42,7 @@ enum file_type {
 #define SHT_REL      9
 #define SHT_DYNSYM   11
 
-// ELF section flags
+// elf section flags
 #define SHF_WRITE     0x1
 #define SHF_ALLOC     0x2
 #define SHF_EXECINSTR 0x4
@@ -143,6 +142,13 @@ enum ins_type {
     
     MOVUPS, MOVAPS,
     
+    ENTER, LEAVE, SALC,
+    LAR, LSL, LSS, LFS, LGS,
+    SYSCALL, SYSRET, SYSENTER, SYSEXIT,
+    CLTS, INVD, WBINVD, UD2, GETSEC,
+    WRMSR, RDTSC, RDMSR, RDPMC,
+    MOVNTI, JMPE,
+    
     SEGMENT_OVERRIDE,
     
     INVALID
@@ -190,7 +196,7 @@ instruction opcode_table[256] = {
     [0x5F] = {POP, "POP DI/EDI", 1, 1, 0},
 
     
-    // More MOV variants
+
     [0xA0] = {MOV, "MOV AL, moffs8", 5, 1, 0},
     [0xA1] = {MOV, "MOV AX/EAX, moffs16/32", 5, 1, 0},
     [0xA2] = {MOV, "MOV moffs8, AL", 5, 1, 0},
@@ -452,14 +458,14 @@ instruction opcode_table[256] = {
     [0xC1] = {INVALID, "Grp2 r/m16/32, imm8", 3, 1, 1},
     [0xC4] = {LES, "LES r16/32, m16:16/32", 2, 1, 1},
     [0xC5] = {LDS, "LDS r16/32, m16:16/32", 2, 1, 1},
-    [0xC8] = {INVALID, "ENTER imm16, imm8", 4, 1, 0},
-    [0xC9] = {INVALID, "LEAVE", 1, 1, 0},
+    [0xC8] = {ENTER, "ENTER imm16, imm8", 4, 1, 0},
+    [0xC9] = {LEAVE, "LEAVE", 1, 1, 0},
     
     [0xD0] = {INVALID, "Grp2 r/m8, 1", 2, 1, 1},
     [0xD1] = {INVALID, "Grp2 r/m16/32, 1", 2, 1, 1},
     [0xD2] = {INVALID, "Grp2 r/m8, CL", 2, 1, 1},
     [0xD3] = {INVALID, "Grp2 r/m16/32, CL", 2, 1, 1},
-    [0xD6] = {INVALID, "SALC", 1, 1, 0},
+    [0xD6] = {SALC, "SALC", 1, 1, 0},
     [0xD8] = {INVALID, "ESC (FPU)", 2, 1, 1},
     [0xD9] = {INVALID, "ESC (FPU)", 2, 1, 1},
     [0xDA] = {INVALID, "ESC (FPU)", 2, 1, 1},
@@ -507,13 +513,51 @@ instruction opcode_table[256] = {
 instruction two_byte_opcode_table[256] = {
     [0 ... 255] = {INVALID, NULL, 1, 1, 0},
     
-    [0x1E] = {ENDBR64, "ENDBR64", 2, 1, 0},
-    [0x1F] = {NOP, "NOP r/m16/32", 2, 1, 1},
+    [0x01] = {INVALID, "Grp7", 2, 1, 1},
+    [0x02] = {LAR, "LAR r16/32, r/m16", 2, 1, 1},
+    [0x03] = {LSL, "LSL r16/32, r/m16", 2, 1, 1},
+    [0x05] = {SYSCALL, "SYSCALL", 1, 1, 0},
+    [0x06] = {CLTS, "CLTS", 1, 1, 0},
+    [0x07] = {SYSRET, "SYSRET", 1, 1, 0},
+    [0x08] = {INVD, "INVD", 1, 1, 0},
+    [0x09] = {WBINVD, "WBINVD", 1, 1, 0},
+    [0x0B] = {UD2, "UD2", 1, 1, 0},
+    [0x0D] = {NOP, "NOP r/m16/32", 2, 1, 1},
     
     [0x10] = {MOVUPS, "MOVUPS xmm, xmm/m128", 2, 1, 1},
     [0x11] = {MOVUPS, "MOVUPS xmm/m128, xmm", 2, 1, 1},
+    [0x12] = {MOVUPS, "MOVLPS xmm, m64", 2, 1, 1},
+    [0x13] = {MOVUPS, "MOVLPS m64, xmm", 2, 1, 1},
+    [0x14] = {MOVUPS, "UNPCKLPS xmm, xmm/m128", 2, 1, 1},
+    [0x15] = {MOVUPS, "UNPCKHPS xmm, xmm/m128", 2, 1, 1},
+    [0x16] = {MOVUPS, "MOVHPS xmm, m64", 2, 1, 1},
+    [0x17] = {MOVUPS, "MOVHPS m64, xmm", 2, 1, 1},
+    [0x18] = {NOP, "Grp16 Prefetch", 2, 1, 1},
+    
+    [0x1E] = {ENDBR64, "ENDBR64", 2, 1, 0},
+    [0x1F] = {NOP, "NOP r/m16/32", 2, 1, 1},
+    
+    [0x20] = {MOV, "MOV r32, CR0-7", 2, 1, 1},
+    [0x21] = {MOV, "MOV r32, DR0-7", 2, 1, 1},
+    [0x22] = {MOV, "MOV CR0-7, r32", 2, 1, 1},
+    [0x23] = {MOV, "MOV DR0-7, r32", 2, 1, 1},
+    
     [0x28] = {MOVAPS, "MOVAPS xmm, xmm/m128", 2, 1, 1},
     [0x29] = {MOVAPS, "MOVAPS xmm/m128, xmm", 2, 1, 1},
+    [0x2A] = {MOVAPS, "CVTPI2PS xmm, mm/m64", 2, 1, 1},
+    [0x2B] = {MOVAPS, "MOVNTPS m128, xmm", 2, 1, 1},
+    [0x2C] = {MOVAPS, "CVTTPS2PI mm, xmm/m64", 2, 1, 1},
+    [0x2D] = {MOVAPS, "CVTPS2PI mm, xmm/m64", 2, 1, 1},
+    [0x2E] = {MOVAPS, "UCOMISS xmm, xmm/m32", 2, 1, 1},
+    [0x2F] = {MOVAPS, "COMISS xmm, xmm/m32", 2, 1, 1},
+    
+    [0x30] = {WRMSR, "WRMSR", 1, 1, 0},
+    [0x31] = {RDTSC, "RDTSC", 1, 1, 0},
+    [0x32] = {RDMSR, "RDMSR", 1, 1, 0},
+    [0x33] = {RDPMC, "RDPMC", 1, 1, 0},
+    [0x34] = {SYSENTER, "SYSENTER", 1, 1, 0},
+    [0x35] = {SYSEXIT, "SYSEXIT", 1, 1, 0},
+    [0x37] = {GETSEC, "GETSEC", 1, 1, 0},
     
     [0x40] = {CMOVO, "CMOVO r16/32, r/m16/32", 2, 1, 1},
     [0x41] = {CMOVNO, "CMOVNO r16/32, r/m16/32", 2, 1, 1},
@@ -531,6 +575,49 @@ instruction two_byte_opcode_table[256] = {
     [0x4D] = {CMOVGE, "CMOVGE r16/32, r/m16/32", 2, 1, 1},
     [0x4E] = {CMOVLE, "CMOVLE r16/32, r/m16/32", 2, 1, 1},
     [0x4F] = {CMOVG, "CMOVG r16/32, r/m16/32", 2, 1, 1},
+    
+    [0x50] = {MOVAPS, "MOVMSKPS r32, xmm", 2, 1, 1},
+    [0x51] = {MOVAPS, "SQRTPS xmm, xmm/m128", 2, 1, 1},
+    [0x52] = {MOVAPS, "RSQRTPS xmm, xmm/m128", 2, 1, 1},
+    [0x53] = {MOVAPS, "RCPPS xmm, xmm/m128", 2, 1, 1},
+    [0x54] = {MOVAPS, "ANDPS xmm, xmm/m128", 2, 1, 1},
+    [0x55] = {MOVAPS, "ANDNPS xmm, xmm/m128", 2, 1, 1},
+    [0x56] = {MOVAPS, "ORPS xmm, xmm/m128", 2, 1, 1},
+    [0x57] = {MOVAPS, "XORPS xmm, xmm/m128", 2, 1, 1},
+    [0x58] = {MOVAPS, "ADDPS xmm, xmm/m128", 2, 1, 1},
+    [0x59] = {MOVAPS, "MULPS xmm, xmm/m128", 2, 1, 1},
+    [0x5A] = {MOVAPS, "CVTPS2PD xmm, xmm/m64", 2, 1, 1},
+    [0x5B] = {MOVAPS, "CVTDQ2PS xmm, xmm/m128", 2, 1, 1},
+    [0x5C] = {MOVAPS, "SUBPS xmm, xmm/m128", 2, 1, 1},
+    [0x5D] = {MOVAPS, "MINPS xmm, xmm/m128", 2, 1, 1},
+    [0x5E] = {MOVAPS, "DIVPS xmm, xmm/m128", 2, 1, 1},
+    [0x5F] = {MOVAPS, "MAXPS xmm, xmm/m128", 2, 1, 1},
+    
+    [0x60] = {MOVAPS, "PUNPCKLBW mm, mm/m32", 2, 1, 1},
+    [0x61] = {MOVAPS, "PUNPCKLWD mm, mm/m32", 2, 1, 1},
+    [0x62] = {MOVAPS, "PUNPCKLDQ mm, mm/m32", 2, 1, 1},
+    [0x63] = {MOVAPS, "PACKSSWB mm, mm/m64", 2, 1, 1},
+    [0x64] = {MOVAPS, "PCMPGTB mm, mm/m64", 2, 1, 1},
+    [0x65] = {MOVAPS, "PCMPGTW mm, mm/m64", 2, 1, 1},
+    [0x66] = {MOVAPS, "PCMPGTD mm, mm/m64", 2, 1, 1},
+    [0x67] = {MOVAPS, "PACKUSWB mm, mm/m64", 2, 1, 1},
+    [0x68] = {MOVAPS, "PUNPCKHBW mm, mm/m64", 2, 1, 1},
+    [0x69] = {MOVAPS, "PUNPCKHWD mm, mm/m64", 2, 1, 1},
+    [0x6A] = {MOVAPS, "PUNPCKHDQ mm, mm/m64", 2, 1, 1},
+    [0x6B] = {MOVAPS, "PACKSSDW mm, mm/m64", 2, 1, 1},
+    [0x6E] = {MOVAPS, "MOVD mm, r/m32", 2, 1, 1},
+    [0x6F] = {MOVAPS, "MOVQ mm, mm/m64", 2, 1, 1},
+    
+    [0x70] = {MOVAPS, "PSHUFW mm, mm/m64, imm8", 3, 1, 1},
+    [0x71] = {MOVAPS, "Grp12 mm, imm8", 3, 1, 1},
+    [0x72] = {MOVAPS, "Grp13 mm, imm8", 3, 1, 1},
+    [0x73] = {MOVAPS, "Grp14 mm, imm8", 3, 1, 1},
+    [0x74] = {MOVAPS, "PCMPEQB mm, mm/m64", 2, 1, 1},
+    [0x75] = {MOVAPS, "PCMPEQW mm, mm/m64", 2, 1, 1},
+    [0x76] = {MOVAPS, "PCMPEQD mm, mm/m64", 2, 1, 1},
+    [0x77] = {MOVAPS, "EMMS", 1, 1, 0},
+    [0x7E] = {MOVAPS, "MOVD r/m32, mm", 2, 1, 1},
+    [0x7F] = {MOVAPS, "MOVQ mm/m64, mm", 2, 1, 1},
     
     [0x80] = {JO, "JO rel16/32", 5, 1, 0},
     [0x81] = {JNO, "JNO rel16/32", 5, 1, 0},
@@ -577,19 +664,34 @@ instruction two_byte_opcode_table[256] = {
     [0xAB] = {BTS, "BTS r/m16/32, r16/32", 2, 1, 1},
     [0xAC] = {SHRD, "SHRD r/m16/32, r16/32, imm8", 3, 1, 1},
     [0xAD] = {SHRD, "SHRD r/m16/32, r16/32, CL", 2, 1, 1},
+    [0xAE] = {INVALID, "Grp15", 2, 1, 1},
     [0xAF] = {IMUL, "IMUL r16/32, r/m16/32", 2, 1, 1},
     
     [0xB0] = {XCHG, "CMPXCHG r/m8, r8", 2, 1, 1},
     [0xB1] = {XCHG, "CMPXCHG r/m16/32, r16/32", 2, 1, 1},
+    [0xB2] = {LSS, "LSS r16/32, m16:16/32", 2, 1, 1},
+    [0xB3] = {BTR, "BTR r/m16/32, r16/32", 2, 1, 1},
+    [0xB4] = {LFS, "LFS r16/32, m16:16/32", 2, 1, 1},
+    [0xB5] = {LGS, "LGS r16/32, m16:16/32", 2, 1, 1},
     [0xB6] = {MOVZX, "MOVZX r16/32, r/m8", 2, 1, 1},
     [0xB7] = {MOVZX, "MOVZX r16/32, r/m16", 2, 1, 1},
+    [0xB8] = {JMPE, "JMPE", 2, 1, 0},
+    [0xB9] = {INVALID, "Grp10", 2, 1, 1},
     [0xBA] = {BT, "Grp8 r/m16/32, imm8", 3, 1, 1},
+    [0xBB] = {BTC, "BTC r/m16/32, r16/32", 2, 1, 1},
+    [0xBC] = {BSF, "BSF r16/32, r/m16/32", 2, 1, 1},
+    [0xBD] = {BSR, "BSR r16/32, r/m16/32", 2, 1, 1},
     [0xBE] = {MOVSX, "MOVSX r16/32, r/m8", 2, 1, 1},
     [0xBF] = {MOVSX, "MOVSX r16/32, r/m16", 2, 1, 1},
     
     [0xC0] = {ADD, "XADD r/m8, r8", 2, 1, 1},
     [0xC1] = {ADD, "XADD r/m16/32, r16/32", 2, 1, 1},
-    [0xC7] = {CMP, "CMPXCHG8B m64", 2, 1, 1},
+    [0xC2] = {MOVAPS, "CMPPS xmm, xmm/m128, imm8", 3, 1, 1},
+    [0xC3] = {MOVNTI, "MOVNTI m32, r32", 2, 1, 1},
+    [0xC4] = {MOVAPS, "PINSRW mm, r32/m16, imm8", 3, 1, 1},
+    [0xC5] = {MOVAPS, "PEXTRW r32, mm, imm8", 3, 1, 1},
+    [0xC6] = {MOVAPS, "SHUFPS xmm, xmm/m128, imm8", 3, 1, 1},
+    [0xC7] = {CMP, "Grp9", 2, 1, 1},
     [0xC8] = {BSWAP, "BSWAP EAX", 1, 1, 0},
     [0xC9] = {BSWAP, "BSWAP ECX", 1, 1, 0},
     [0xCA] = {BSWAP, "BSWAP EDX", 1, 1, 0},
@@ -598,6 +700,52 @@ instruction two_byte_opcode_table[256] = {
     [0xCD] = {BSWAP, "BSWAP EBP", 1, 1, 0},
     [0xCE] = {BSWAP, "BSWAP ESI", 1, 1, 0},
     [0xCF] = {BSWAP, "BSWAP EDI", 1, 1, 0},
+    
+    [0xD1] = {MOVAPS, "PSRLW mm, mm/m64", 2, 1, 1},
+    [0xD2] = {MOVAPS, "PSRLD mm, mm/m64", 2, 1, 1},
+    [0xD3] = {MOVAPS, "PSRLQ mm, mm/m64", 2, 1, 1},
+    [0xD4] = {MOVAPS, "PADDQ mm, mm/m64", 2, 1, 1},
+    [0xD5] = {MOVAPS, "PMULLW mm, mm/m64", 2, 1, 1},
+    [0xD7] = {MOVAPS, "PMOVMSKB r32, mm", 2, 1, 1},
+    [0xD8] = {MOVAPS, "PSUBUSB mm, mm/m64", 2, 1, 1},
+    [0xD9] = {MOVAPS, "PSUBUSW mm, mm/m64", 2, 1, 1},
+    [0xDA] = {MOVAPS, "PMINUB mm, mm/m64", 2, 1, 1},
+    [0xDB] = {MOVAPS, "PAND mm, mm/m64", 2, 1, 1},
+    [0xDC] = {MOVAPS, "PADDUSB mm, mm/m64", 2, 1, 1},
+    [0xDD] = {MOVAPS, "PADDUSW mm, mm/m64", 2, 1, 1},
+    [0xDE] = {MOVAPS, "PMAXUB mm, mm/m64", 2, 1, 1},
+    [0xDF] = {MOVAPS, "PANDN mm, mm/m64", 2, 1, 1},
+    
+    [0xE0] = {MOVAPS, "PAVGB mm, mm/m64", 2, 1, 1},
+    [0xE1] = {MOVAPS, "PSRAW mm, mm/m64", 2, 1, 1},
+    [0xE2] = {MOVAPS, "PSRAD mm, mm/m64", 2, 1, 1},
+    [0xE3] = {MOVAPS, "PAVGW mm, mm/m64", 2, 1, 1},
+    [0xE4] = {MOVAPS, "PMULHUW mm, mm/m64", 2, 1, 1},
+    [0xE5] = {MOVAPS, "PMULHW mm, mm/m64", 2, 1, 1},
+    [0xE7] = {MOVAPS, "MOVNTQ m64, mm", 2, 1, 1},
+    [0xE8] = {MOVAPS, "PSUBSB mm, mm/m64", 2, 1, 1},
+    [0xE9] = {MOVAPS, "PSUBSW mm, mm/m64", 2, 1, 1},
+    [0xEA] = {MOVAPS, "PMINSW mm, mm/m64", 2, 1, 1},
+    [0xEB] = {MOVAPS, "POR mm, mm/m64", 2, 1, 1},
+    [0xEC] = {MOVAPS, "PADDSB mm, mm/m64", 2, 1, 1},
+    [0xED] = {MOVAPS, "PADDSW mm, mm/m64", 2, 1, 1},
+    [0xEE] = {MOVAPS, "PMAXSW mm, mm/m64", 2, 1, 1},
+    [0xEF] = {MOVAPS, "PXOR mm, mm/m64", 2, 1, 1},
+    
+    [0xF1] = {MOVAPS, "PSLLW mm, mm/m64", 2, 1, 1},
+    [0xF2] = {MOVAPS, "PSLLD mm, mm/m64", 2, 1, 1},
+    [0xF3] = {MOVAPS, "PSLLQ mm, mm/m64", 2, 1, 1},
+    [0xF4] = {MOVAPS, "PMULUDQ mm, mm/m64", 2, 1, 1},
+    [0xF5] = {MOVAPS, "PMADDWD mm, mm/m64", 2, 1, 1},
+    [0xF6] = {MOVAPS, "PSADBW mm, mm/m64", 2, 1, 1},
+    [0xF7] = {MOVAPS, "MASKMOVQ mm, mm", 2, 1, 1},
+    [0xF8] = {MOVAPS, "PSUBB mm, mm/m64", 2, 1, 1},
+    [0xF9] = {MOVAPS, "PSUBW mm, mm/m64", 2, 1, 1},
+    [0xFA] = {MOVAPS, "PSUBD mm, mm/m64", 2, 1, 1},
+    [0xFB] = {MOVAPS, "PSUBQ mm, mm/m64", 2, 1, 1},
+    [0xFC] = {MOVAPS, "PADDB mm, mm/m64", 2, 1, 1},
+    [0xFD] = {MOVAPS, "PADDW mm, mm/m64", 2, 1, 1},
+    [0xFE] = {MOVAPS, "PADDD mm, mm/m64", 2, 1, 1},
 };
 
 char *mod_rm[2][8][4] = {
@@ -2019,6 +2167,81 @@ void display_functions(file_t *file) {
     printf("==========================\n\n");
 }
 
+void extract_strings(file_t *file) {
+    printf("\n==== EXTRACTED STRINGS ====\n");
+    
+    int string_count = 0;
+    
+    // Look for .rodata, .data, .dynstr, .strtab sections
+    for (int i = 0; i < file->num_of_sections; i++) {
+        section_t *s = &file->sections[i];
+        
+        // Check if this is a string-like section
+        int is_string_section = 0;
+        if (strstr(s->name, ".rodata") != NULL || 
+            strstr(s->name, ".data") != NULL ||
+            strstr(s->name, ".dynstr") != NULL ||
+            strstr(s->name, ".strtab") != NULL ||
+            s->type == SHT_STRTAB) {
+            is_string_section = 1;
+        }
+        
+        if (!is_string_section || !s->data || s->raw_size == 0) {
+            continue;
+        }
+        
+        printf("\n[Section: %s]\n", s->name);
+        printf("%-10s %-60s\n", "Offset", "String");
+        printf("--------------------------------------------------------------------------------\n");
+        
+        uint32_t offset = 0;
+        while (offset < s->raw_size) {
+            // Find printable strings (at least 4 characters long)
+            uint32_t start = offset;
+            int len = 0;
+            
+            // Check for printable ASCII characters
+            while (offset < s->raw_size && 
+                   s->data[offset] >= 0x20 && 
+                   s->data[offset] <= 0x7E) {
+                len++;
+                offset++;
+            }
+            
+            // If we found a string of at least 4 characters
+            if (len >= 4 && offset < s->raw_size && s->data[offset] == 0) {
+                printf("0x%08x ", s->vaddr + start);
+                
+                // Print the string with proper escaping
+                for (uint32_t j = start; j < offset && j < s->raw_size; j++) {
+                    char c = s->data[j];
+                    if (c >= 0x20 && c <= 0x7E) {
+                        putchar(c);
+                    }
+                }
+                printf("\n");
+                string_count++;
+                
+                // Limit output to avoid overwhelming display
+                if (string_count >= 100) {
+                    printf("... (showing first 100 strings, more exist)\n");
+                    goto done;
+                }
+            }
+            
+            offset++;
+        }
+    }
+    
+done:
+    if (string_count == 0) {
+        printf("No strings found in binary.\n");
+    } else {
+        printf("\nTotal strings shown: %d\n", string_count > 100 ? 100 : string_count);
+    }
+    printf("==========================\n\n");
+}
+
 
 int main(int argc, char ** argv){
     if (argc < 2){
@@ -2040,6 +2263,7 @@ int main(int argc, char ** argv){
     display_file_info(file);
     display_sections(file);
     display_functions(file);
+    extract_strings(file);
 
     printf("\n==== DISASSEMBLY ====\n");
     for (int i = 0; i < file->num_of_sections; i++) {
